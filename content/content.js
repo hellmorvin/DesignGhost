@@ -561,7 +561,7 @@
             <div class="stp-style-col" style="grid-column: span 2;">
               <label class="stp-label">Замена картинки (src)</label>
               <div class="stp-file-input-wrapper" style="display: flex; gap: 8px;">
-                <button class="stp-btn stp-btn-secondary" id="stp-btn-upload-img-src" style="flex: 1; padding: 6px 12px; font-size: 11px;">Выбрать фото</button>
+                <button class="stp-btn stp-btn-secondary stp-btn-sm" id="stp-btn-upload-img-src" style="flex: 1;">Выбрать фото</button>
                 <input type="file" id="stp-upload-img-src" accept="image/*" style="display:none;">
                 <button class="stp-btn stp-btn-danger" id="stp-btn-revert-img-src" style="display: none; padding: 0 10px;" title="Сбросить картинку">&times;</button>
               </div>
@@ -597,7 +597,7 @@
             <div class="stp-style-col" style="grid-column: span 2;">
               <label class="stp-label">Фоновое изображение</label>
               <div class="stp-file-input-wrapper" style="display: flex; gap: 8px;">
-                <button class="stp-btn stp-btn-secondary" id="stp-btn-upload-bg-img" style="flex: 1; padding: 6px 12px; font-size: 11px;">Загрузить фон</button>
+                <button class="stp-btn stp-btn-secondary stp-btn-sm" id="stp-btn-upload-bg-img" style="flex: 1;">Загрузить фон</button>
                 <input type="file" id="stp-upload-bg-img" accept="image/*" style="display:none;">
                 <button class="stp-btn stp-btn-danger" id="stp-btn-clear-bg-img" style="display: none; padding: 0 10px;" title="Удалить фон">&times;</button>
               </div>
@@ -651,7 +651,7 @@
           <div>
             <div class="stp-label" style="display: flex; justify-content: space-between; align-items: center;">
               <span>HTML код элемента</span>
-              <button class="stp-btn stp-btn-secondary" id="stp-btn-insert-img-html" style="font-size: 11px; padding: 2px 8px; width: auto;">
+              <button class="stp-btn stp-btn-secondary stp-btn-xs" id="stp-btn-insert-img-html" style="width: auto;">
                 Вставить фото
               </button>
               <input type="file" id="stp-insert-img-html" accept="image/*" style="display:none;">
