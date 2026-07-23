@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DesignGhost</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-icon" style="background: rgba(168, 85, 247, 0.15); color: #a855f7;">
+          <!-- A cute ghost icon or custom SVG instead of code angle brackets -->
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 10h.01M15 10h.01M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>
+          </svg>
+        </div>
+        <div class="brand-info">
+          <span class="app-name">Design<span class="badge-pro" style="background: linear-gradient(135deg, #a855f7, #6366f1) !important;">Ghost</span></span>
+          <span class="domain-target" id="current-domain">Загрузка домена...</span>
+        </div>
+      </div>
+      <div class="toggle-wrapper">
+        <label class="switch" title="Включить/выключить изменения для этого сайта">
+          <input type="checkbox" id="domain-enable-toggle" checked>
+          <span class="slider round"></span>
+        </label>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs">
+      <button class="nav-btn active" data-tab="tab-css">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
+        </svg>
+        CSS Стиль
+      </button>
+
+      <button class="nav-btn" data-tab="tab-html">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+          <line x1="9" y1="3" x2="9" y2="21"></line>
+        </svg>
+        Инспектор DOM
+      </button>
+
+      <button class="nav-btn" data-tab="tab-settings">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+        Бэкап и Все Сайты
+      </button>
+    </nav>
+
+    <!-- Content Sections -->
+    <main class="main-content">
+
+      <!-- TAB 1: CSS EDITOR -->
+      <section class="tab-pane active" id="tab-css">
+        <div class="editor-toolbar">
+          <span class="toolbar-title">Собственный CSS код</span>
+          <div class="toolbar-actions">
+            <button class="btn-icon" id="btn-insert-img-css" title="Вставить изображение (base64)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                <polyline points="21 15 16 10 5 21"></polyline>
+              </svg>
+            </button>
+            <input type="file" id="css-insert-img-input" accept="image/*" style="display:none">
+            
+            <button class="btn-icon" id="btn-format-css" title="Форматировать CSS">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="21" y1="10" x2="3" y2="10"></line>
+                <line x1="21" y1="6" x2="3" y2="6"></line>
+                <line x1="21" y1="14" x2="3" y2="14"></line>
+                <line x1="21" y1="18" x2="3" y2="18"></line>
+              </svg>
+            </button>
+            <button class="btn-icon btn-icon-danger" id="btn-clear-css" title="Очистить CSS">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="code-editor-container">
+          <div class="line-numbers" id="editor-line-numbers">1</div>
+          <textarea id="css-editor" spellcheck="false" placeholder="/* Напишите ваш CSS код здесь. Например: */&#10;&#10;body {&#10;  background-color: #0f172a !important;&#10;  color: #e2e8f0 !important;&#10;}&#10;&#10;.header {&#10;  display: none !important;&#10;}"></textarea>
+        </div>
+        <div class="action-footer">
+          <button class="btn btn-primary" id="btn-save-css">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+              <polyline points="17 21 17 13 7 13 7 21"></polyline>
+              <polyline points="7 3 7 8 15 8"></polyline>
+            </svg>
+            Применить и Сохранить CSS
+          </button>
+        </div>
+      </section>
+
+      <!-- TAB 2: HTML RULES -->
+      <section class="tab-pane" id="tab-html">
+        <div class="inspector-banner">
+          <div class="inspector-info">
+            <strong>Интерактивный Инспектор</strong>
+            <p>Выделяйте и редактируйте элементы прямо на странице кликом мыши.</p>
+          </div>
+          <button class="btn btn-accent" id="btn-toggle-inspector">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="22" y1="12" x2="18" y2="12"></line>
+              <line x1="6" y1="12" x2="2" y2="12"></line>
+              <line x1="12" y1="6" x2="12" y2="2"></line>
+              <line x1="12" y1="22" x2="12" y2="18"></line>
+            </svg>
+            <span id="inspector-btn-text">Включить Инспектор</span>
+          </button>
+        </div>
+
+        <div class="section-divider">
+          <span>Сохраненные HTML правила для сайта</span>
+        </div>
+
+        <div class="html-rules-list" id="html-rules-list">
+          <div class="empty-state">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="1.5">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="9" y1="3" x2="9" y2="21"></line>
+            </svg>
+            <p>Нет активных правил для этого сайта.<br>Используйте Инспектор выше, чтобы скрыть или изменить элементы.</p>
+          </div>
+        </div>
+
+        <div class="manual-rule-adder">
+          <!-- Manual Rule Form -->
+          <div class="manual-rule-form" id="manual-rule-form" style="display: none;">
+            <div class="form-group">
+              <label for="manual-selector">CSS Селектор</label>
+              <input type="text" id="manual-selector" placeholder="Например: .ads-banner, #header" class="form-input">
+            </div>
+            <div class="form-group">
+              <label for="manual-action">Действие</label>
+              <select id="manual-action" class="form-select">
+                <option value="hide">Скрыть (display: none)</option>
+                <option value="remove">Удалить из DOM</option>
+                <option value="edit_html">Изменить HTML</option>
+              </select>
+            </div>
+            <div class="form-group" id="manual-value-group" style="display: none;">
+              <label for="manual-value">Новое значение HTML</label>
+              <textarea id="manual-value" placeholder="Введите HTML код..." class="form-textarea" spellcheck="false"></textarea>
+            </div>
+            <div class="form-buttons">
+              <button class="btn btn-secondary" id="btn-cancel-manual-rule">Отмена</button>
+              <button class="btn btn-primary" id="btn-save-manual-rule">Сохранить</button>
+            </div>
+          </div>
+
+          <button class="btn btn-secondary btn-full" id="btn-add-manual-rule">
+            + Добавить правило селектора вручную
+          </button>
+        </div>
+      </section>
+
+      <!-- TAB 3: BACKUP & ALL SITES -->
+      <section class="tab-pane" id="tab-settings">
+        <div class="settings-card">
+          <h4>💾 Экспорт и Импорт (Резервное копирование)</h4>
+          <p class="settings-desc">Сохраните ваши кастомные стили и правила в JSON файл, чтобы перенести их на другой ПК или восстановить в любое время.</p>
+          <div class="btn-group">
+            <button class="btn btn-secondary" id="btn-export-json">
+              📥 Экспортировать JSON
+            </button>
+            <button class="btn btn-secondary" id="btn-import-json">
+              📤 Импортировать JSON
+            </button>
+            <input type="file" id="import-file-input" accept=".json" style="display:none">
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <h4>🌐 Сайты с кастомным дизайном</h4>
+          <div id="sites-list" class="sites-list">
+            <div class="empty-state">Загрузка списка сайтов...</div>
+          </div>
+        </div>
+
+        <div class="settings-card support-card" style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(168, 85, 247, 0.08)); border: 1px solid rgba(99, 102, 241, 0.25);">
+          <h4 style="color: #a855f7; display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+            </svg>
+            Поддержать morvin
+          </h4>
+          <p class="settings-desc" style="margin-bottom: 12px;">Нравится расширение? Поддержите автора переводом через DonationAlerts. Большое спасибо за поддержку!</p>
+          <button class="btn btn-primary btn-full" id="btn-support-link" style="background: linear-gradient(to right, #ff7b00, #ff5100); border: none; color: #fff; font-weight: bold; cursor: pointer;">
+            🧡 Открыть DonationAlerts
+          </button>
+        </div>
+
+        <div class="settings-card danger-zone">
+          <h4>⚠️ Опасная зона</h4>
+          <div class="btn-group">
+            <button class="btn btn-danger" id="btn-reset-domain">Сбросить текущий сайт</button>
+            <button class="btn btn-danger" id="btn-reset-all">Сбросить ВСЕ данные</button>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer Status -->
+    <footer class="app-footer" style="display: flex; justify-content: space-between; align-items: center;">
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <span class="status-indicator online"></span>
+        <span class="status-text" id="status-text">Изменения сохраняются</span>
+      </div>
+      <a href="#" id="link-author-github" style="opacity: 0.5; font-size: 10px; font-weight: bold; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); text-decoration: none; display: flex; align-items: center; gap: 4px; transition: opacity 0.2s;">
+        by morvin
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+          <polyline points="15 3 21 3 21 9"></polyline>
+          <line x1="10" y1="14" x2="21" y2="3"></line>
+        </svg>
+      </a>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,1283 @@
+/**
+ * DesignGhost - Content Script
+ * Automatically applies saved CSS & HTML tweaks, and provides an element inspector.
+ */
+
+(function () {
+  'use strict';
+
+  if (window.__designGhostLoaded) {
+    console.log('DesignGhost: Content script already loaded on this page.');
+    return;
+  }
+  window.__designGhostLoaded = true;
+
+  const hostname = window.location.hostname;
+  let customStyleElement = null;
+  let isInspectMode = false;
+  let highlightedElement = null;
+  let selectedElement = null;
+  let highlightBox = null;
+  let highlightTag = null;
+  let inspectorModal = null;
+  let currentDomainTweaks = { css: '', htmlRules: [], enabled: true };
+  let mutationObserver = null;
+
+  // Image compression and resize helper (downscale to max 1200px and compress to 0.8 JPEG quality)
+  function compressAndResizeImage(file, maxDimension = 1200, quality = 0.8) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+
+          if (width > maxDimension || height > maxDimension) {
+            if (width > height) {
+              height = Math.round((height * maxDimension) / width);
+              width = maxDimension;
+            } else {
+              width = Math.round((width * maxDimension) / height);
+              height = maxDimension;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // Convert to compressed jpeg data url
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+          resolve(compressedDataUrl);
+        };
+        img.onerror = () => reject(new Error('Ошибка загрузки картинки для сжатия'));
+        img.src = e.target.result;
+      };
+      reader.onerror = () => reject(new Error('Ошибка чтения файла'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Initial Execution
+  init();
+
+  function init() {
+    createStyleTag();
+    loadAndApplyTweaks();
+    setupMessageListeners();
+    setupMutationObserver();
+  }
+
+  // 1. Create or get Custom Style Tag in DOM
+  function createStyleTag() {
+    if (!customStyleElement) {
+      customStyleElement = document.createElement('style');
+      customStyleElement.id = 'site-tweaker-custom-css';
+      const target = document.head || document.documentElement;
+      if (target) {
+        target.appendChild(customStyleElement);
+      } else {
+        document.addEventListener('DOMContentLoaded', () => {
+          (document.head || document.documentElement).appendChild(customStyleElement);
+        });
+      }
+    }
+  }
+
+  // 2. Load tweaks from storage for current domain
+  function loadAndApplyTweaks() {
+    chrome.storage.local.get(['siteTweaks', 'globalEnabled'], (result) => {
+      const globalEnabled = result.globalEnabled !== false;
+      const allTweaks = result.siteTweaks || {};
+      const domainData = allTweaks[hostname] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
+
+      currentDomainTweaks = domainData;
+
+      if (globalEnabled && domainData.enabled !== false) {
+        applyCustomCSS(domainData.css || '');
+        applyHTMLRules(domainData.htmlRules || []);
+        applyCustomHTML(domainData.html || '');
+        applyCustomJS(domainData.js || '');
+      } else {
+        applyCustomCSS('');
+        applyCustomHTML('');
+        applyCustomJS('');
+      }
+
+      updateBadgeCount();
+    });
+  }
+
+  function updateBadgeCount() {
+    if (!currentDomainTweaks) return;
+    const activeRulesCount = (currentDomainTweaks.css ? 1 : 0) + 
+                             (currentDomainTweaks.html ? 1 : 0) + 
+                             (currentDomainTweaks.js ? 1 : 0) + 
+                             (currentDomainTweaks.htmlRules ? currentDomainTweaks.htmlRules.filter(r => r.active !== false).length : 0);
+    chrome.runtime.sendMessage({ action: 'UPDATE_BADGE', count: activeRulesCount }).catch(() => {});
+  }
+
+  // 3. Inject CSS into live page
+  function applyCustomCSS(cssCode) {
+    createStyleTag();
+    if (customStyleElement) {
+      customStyleElement.textContent = cssCode || '';
+    }
+  }
+
+  // Inject HTML into custom container in document body
+  function applyCustomHTML(htmlCode) {
+    let container = document.getElementById('site-tweaker-custom-html-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'site-tweaker-custom-html-container';
+      
+      const insertContainer = () => {
+        const target = document.body || document.documentElement;
+        if (target && !document.getElementById('site-tweaker-custom-html-container')) {
+          target.appendChild(container);
+        }
+      };
+
+      if (document.body) {
+        insertContainer();
+      } else {
+        document.addEventListener('DOMContentLoaded', insertContainer);
+      }
+    }
+    
+    // Avoid resetting innerHTML unnecessarily to avoid page churn
+    if (container.innerHTML !== (htmlCode || '')) {
+      container.innerHTML = htmlCode || '';
+    }
+  }
+
+  // Inject script in main world context to run custom JS
+  function applyCustomJS(jsCode) {
+    const oldScript = document.getElementById('design-ghost-custom-js');
+    if (oldScript) oldScript.remove();
+
+    if (!jsCode || !jsCode.trim()) return;
+
+    const script = document.createElement('script');
+    script.id = 'design-ghost-custom-js';
+    script.textContent = `
+      (function() {
+        try {
+          ${jsCode}
+        } catch(e) {
+          console.error("DesignGhost Custom JS Error:", e);
+        }
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(script);
+  }
+
+  // 4. Apply HTML rules to DOM elements
+  function applyHTMLRules(rules) {
+    if (!rules || !Array.isArray(rules)) return;
+
+    rules.forEach((rule) => {
+      if (rule.active === false) return;
+      if (!rule.selector) return;
+
+      try {
+        const elements = document.querySelectorAll(rule.selector);
+        elements.forEach((el) => {
+          // Avoid mutating our own inspector elements
+          if (el.closest('#site-tweaker-inspector-modal') || el.classList.contains('site-tweaker-highlight-box')) {
+            return;
+          }
+
+          if (rule.action === 'hide') {
+            el.style.setProperty('display', 'none', 'important');
+          } else if (rule.action === 'remove') {
+            el.remove();
+          } else if (rule.action === 'edit_html' && rule.value !== undefined) {
+            if (el.getAttribute('data-stp-modified-html') !== rule.id) {
+              // Store original html if not stored yet
+              if (!el.hasAttribute('data-stp-original-html')) {
+                el.setAttribute('data-stp-original-html', el.innerHTML);
+              }
+              el.innerHTML = rule.value;
+              el.setAttribute('data-stp-modified-html', rule.id);
+            }
+          } else if (rule.action === 'edit_text' && rule.value !== undefined) {
+            if (el.getAttribute('data-stp-modified-text') !== rule.id) {
+              el.textContent = rule.value;
+              el.setAttribute('data-stp-modified-text', rule.id);
+            }
+          } else if (rule.action === 'edit_style' && typeof rule.value === 'object') {
+            for (const [prop, val] of Object.entries(rule.value)) {
+              if (val !== undefined && val !== '') {
+                el.style.setProperty(prop, val, 'important');
+              }
+            }
+          } else if (rule.action === 'edit_attribute' && rule.attribute !== undefined && rule.value !== undefined) {
+            if (el.getAttribute(rule.attribute) !== rule.value) {
+              if (!el.hasAttribute('data-stp-original-' + rule.attribute)) {
+                el.setAttribute('data-stp-original-' + rule.attribute, el.getAttribute(rule.attribute) || '');
+              }
+              el.setAttribute(rule.attribute, rule.value);
+            }
+          }
+        });
+      } catch (e) {
+        console.warn('DesignGhost: Invalid selector or error applying rule:', rule.selector, e);
+      }
+    });
+  }
+
+  // 5. Mutation Observer to keep dynamic SPA pages modified
+  function setupMutationObserver() {
+    if (mutationObserver) return;
+
+    mutationObserver = new MutationObserver(() => {
+      if (currentDomainTweaks && currentDomainTweaks.htmlRules) {
+        applyHTMLRules(currentDomainTweaks.htmlRules);
+      }
+    });
+
+    const startObserver = () => {
+      if (document.body) {
+        mutationObserver.observe(document.body, {
+          childList: true,
+          subtree: true
+        });
+      } else {
+        document.addEventListener('DOMContentLoaded', () => {
+          if (document.body) {
+            mutationObserver.observe(document.body, {
+              childList: true,
+              subtree: true
+            });
+          }
+        });
+      }
+    };
+
+    startObserver();
+  }
+
+  // 6. Listeners for extension messages from popup
+  function setupMessageListeners() {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.action === 'APPLY_CUSTOM_CSS') {
+        currentDomainTweaks.css = message.css;
+        applyCustomCSS(message.css);
+        updateBadgeCount();
+        sendResponse({ success: true });
+      }
+
+      if (message.action === 'APPLY_CUSTOM_JS') {
+        currentDomainTweaks.js = message.js;
+        applyCustomJS(message.js);
+        updateBadgeCount();
+        sendResponse({ success: true });
+      }
+
+      if (message.action === 'APPLY_CUSTOM_HTML') {
+        currentDomainTweaks.html = message.html;
+        applyCustomHTML(message.html);
+        updateBadgeCount();
+        sendResponse({ success: true });
+      }
+
+      if (message.action === 'APPLY_HTML_RULES') {
+        currentDomainTweaks.htmlRules = message.htmlRules;
+        applyHTMLRules(message.htmlRules);
+        updateBadgeCount();
+        sendResponse({ success: true });
+      }
+
+      if (message.action === 'TOGGLE_INSPECTOR') {
+        toggleInspectorMode(message.enable);
+        sendResponse({ isInspectMode });
+      }
+
+      if (message.action === 'GET_DOM_INFO') {
+        sendResponse({
+          hostname,
+          css: currentDomainTweaks.css || '',
+          js: currentDomainTweaks.js || '',
+          html: currentDomainTweaks.html || '',
+          htmlRules: currentDomainTweaks.htmlRules || [],
+          enabled: currentDomainTweaks.enabled !== false,
+          isInspectMode
+        });
+      }
+
+      if (message.action === 'RELOAD_STORAGE') {
+        loadAndApplyTweaks();
+        sendResponse({ success: true });
+      }
+
+      return true;
+    });
+  }
+
+  // Save current domain state back to chrome.storage.local
+  function saveCurrentDomainTweaks() {
+    chrome.storage.local.get(['siteTweaks'], (result) => {
+      const allTweaks = result.siteTweaks || {};
+      allTweaks[hostname] = currentDomainTweaks;
+      chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
+        updateBadgeCount();
+      });
+    });
+  }
+
+  // --- 7. Element Inspector & Picker Logic ---
+
+  function toggleInspectorMode(enable) {
+    isInspectMode = enable !== undefined ? enable : !isInspectMode;
+
+    if (isInspectMode) {
+      createHighlightOverlay();
+      document.addEventListener('mouseover', handleMouseOver, true);
+      document.addEventListener('click', handleElementClick, true);
+      showToast('Режим инспектора активен. Наведите курсор и кликните на нужный элемент.');
+    } else {
+      removeHighlightOverlay();
+      document.removeEventListener('mouseover', handleMouseOver, true);
+      document.removeEventListener('click', handleElementClick, true);
+      if (inspectorModal) {
+        inspectorModal.remove();
+        inspectorModal = null;
+      }
+      showToast('Режим инспектора выключен.');
+    }
+  }
+
+  function createHighlightOverlay() {
+    if (!highlightBox) {
+      highlightBox = document.createElement('div');
+      highlightBox.className = 'site-tweaker-highlight-box';
+
+      highlightTag = document.createElement('div');
+      highlightTag.className = 'site-tweaker-highlight-tag';
+      highlightBox.appendChild(highlightTag);
+
+      document.body.appendChild(highlightBox);
+    }
+  }
+
+  function removeHighlightOverlay() {
+    if (highlightBox) {
+      highlightBox.remove();
+      highlightBox = null;
+      highlightTag = null;
+    }
+  }
+
+  function handleMouseOver(e) {
+    if (!isInspectMode) return;
+    const target = e.target;
+
+    // Ignore overlay elements
+    if (target.closest('#site-tweaker-inspector-modal') || target.classList.contains('site-tweaker-highlight-box')) {
+      return;
+    }
+
+    highlightedElement = target;
+    positionHighlightBox(target);
+  }
+
+  function positionHighlightBox(el) {
+    if (!highlightBox) return;
+    const rect = el.getBoundingClientRect();
+    const scrollX = window.scrollX || window.pageXOffset;
+    const scrollY = window.scrollY || window.pageYOffset;
+
+    highlightBox.style.top = `${rect.top + scrollY}px`;
+    highlightBox.style.left = `${rect.left + scrollX}px`;
+    highlightBox.style.width = `${rect.width}px`;
+    highlightBox.style.height = `${rect.height}px`;
+
+    const selector = getUniqueCSSSelector(el);
+    highlightTag.textContent = `<${el.tagName.toLowerCase()}> ${selector}`;
+  }
+
+  function handleElementClick(e) {
+    if (!isInspectMode) return;
+    const target = e.target;
+
+    if (target.closest('#site-tweaker-inspector-modal') || target.classList.contains('site-tweaker-highlight-box')) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    selectedElement = target;
+    openInspectorModal(target);
+  }
+
+  // Generate robust CSS Selector for element
+  function getUniqueCSSSelector(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return '';
+
+    if (el.id) {
+      return `#${CSS.escape(el.id)}`;
+    }
+
+    let path = [];
+    while (el && el.nodeType === Node.ELEMENT_NODE) {
+      let selector = el.nodeName.toLowerCase();
+      if (el.id) {
+        selector += `#${CSS.escape(el.id)}`;
+        path.unshift(selector);
+        break;
+      } else {
+        let sibling = el;
+        let nth = 1;
+        while (sibling = sibling.previousElementSibling) {
+          if (sibling.nodeName.toLowerCase() === selector) nth++;
+        }
+        if (nth !== 1) selector += `:nth-of-type(${nth})`;
+      }
+      path.unshift(selector);
+      el = el.parentElement;
+      if (el && el.tagName === 'BODY') {
+        path.unshift('body');
+        break;
+      }
+    }
+    return path.join(' > ');
+  }
+
+  // RGB to Hex helper functions
+  function rgbToHex(rgb) {
+    if (!rgb || rgb === 'rgba(0, 0, 0, 0)' || rgb === 'transparent') return '#ffffff';
+    const match = rgb.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/);
+    if (!match) {
+      const matchRgba = rgb.match(/^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d\.]+)\)$/);
+      if (matchRgba) {
+        if (parseFloat(matchRgba[4]) === 0) return '#ffffff';
+        return rgbValuesToHex(parseInt(matchRgba[1]), parseInt(matchRgba[2]), parseInt(matchRgba[3]));
+      }
+      return '#ffffff';
+    }
+    return rgbValuesToHex(parseInt(match[1]), parseInt(match[2]), parseInt(match[3]));
+  }
+
+  function rgbValuesToHex(r, g, b) {
+    return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+  }
+
+  // Open Inspector Dialog Modal
+  function openInspectorModal(el) {
+    if (inspectorModal) {
+      inspectorModal.remove();
+    }
+
+    const selector = getUniqueCSSSelector(el);
+    const currentHTML = el.innerHTML;
+    const isImgTag = el.tagName === 'IMG';
+
+    inspectorModal = document.createElement('div');
+    inspectorModal.id = 'site-tweaker-inspector-modal';
+    inspectorModal.innerHTML = `
+      <div class="stp-header" id="stp-drag-handle">
+        <div class="stp-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 10h.01M15 10h.01M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>
+          </svg>
+          Инспектор DesignGhost
+        </div>
+        <button class="stp-close-btn" id="stp-modal-close">&times;</button>
+      </div>
+      <div class="stp-tabs">
+        <button class="stp-tab-btn active" id="stp-tab-btn-style">Стили (CSS)</button>
+        <button class="stp-tab-btn" id="stp-tab-btn-html">HTML / Текст</button>
+      </div>
+      <div class="stp-body">
+        <div>
+          <div class="stp-label">CSS Селектор</div>
+          <div class="stp-selector-badge">${escapeHTML(selector)}</div>
+        </div>
+
+        <!-- TAB 1: VISUAL CSS STYLES -->
+        <div class="stp-tab-content active" id="stp-tab-content-style">
+          <div class="stp-style-grid">
+            <div class="stp-style-col">
+              <label class="stp-label">Цвет текста</label>
+              <div class="stp-color-input-wrapper">
+                <input type="color" id="stp-color-text" class="stp-color-input">
+                <input type="text" id="stp-color-text-hex" class="stp-text-input-mini" placeholder="Auto">
+              </div>
+            </div>
+            <div class="stp-style-col">
+              <label class="stp-label">Цвет фона</label>
+              <div class="stp-color-input-wrapper">
+                <input type="color" id="stp-color-bg" class="stp-color-input">
+                <input type="text" id="stp-color-bg-hex" class="stp-text-input-mini" placeholder="Auto">
+              </div>
+            </div>
+          </div>
+
+          <div class="stp-slider-group">
+            <div class="stp-slider-header">
+              <span class="stp-label">Размер шрифта</span>
+              <span class="stp-range-val" id="stp-font-size-val">Auto</span>
+            </div>
+            <input type="range" id="stp-font-size" min="8" max="72" value="16" class="stp-range-slider">
+          </div>
+
+          <div class="stp-slider-group">
+            <div class="stp-slider-header">
+              <span class="stp-label">Скругление углов</span>
+              <span class="stp-range-val" id="stp-border-radius-val">Auto</span>
+            </div>
+            <input type="range" id="stp-border-radius" min="0" max="60" value="0" class="stp-range-slider">
+          </div>
+
+          <div class="stp-slider-group">
+            <div class="stp-slider-header">
+              <span class="stp-label">Прозрачность</span>
+              <span class="stp-range-val" id="stp-opacity-val">100%</span>
+            </div>
+            <input type="range" id="stp-opacity" min="0" max="100" value="100" class="stp-range-slider">
+          </div>
+
+          <div class="stp-style-grid">
+            <div class="stp-style-col">
+              <label class="stp-label">Внутренний отступ (Padding, px)</label>
+              <input type="number" id="stp-padding" class="stp-num-input" placeholder="Auto" min="0">
+            </div>
+            <div class="stp-style-col">
+              <label class="stp-label">Внешний отступ (Margin, px)</label>
+              <input type="number" id="stp-margin" class="stp-num-input" placeholder="Auto" min="0">
+            </div>
+          </div>
+
+          <!-- IMAGE REPLACEMENT (IMG TAG ONLY) -->
+          ${isImgTag ? `
+          <div class="stp-style-grid" style="margin-top: 6px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 10px;">
+            <div class="stp-style-col" style="grid-column: span 2;">
+              <label class="stp-label">Замена картинки (src)</label>
+              <div class="stp-file-input-wrapper" style="display: flex; gap: 8px;">
+                <button class="stp-btn stp-btn-secondary" id="stp-btn-upload-img-src" style="flex: 1; padding: 6px 12px; font-size: 11px;">Выбрать фото</button>
+                <input type="file" id="stp-upload-img-src" accept="image/*" style="display:none;">
+                <button class="stp-btn stp-btn-danger" id="stp-btn-revert-img-src" style="display: none; padding: 0 10px;" title="Сбросить картинку">&times;</button>
+              </div>
+            </div>
+          </div>
+          <div id="stp-img-options" style="display: none; margin-top: 8px; gap: 8px; flex-direction: column;">
+            <div class="stp-style-grid">
+              <div class="stp-style-col">
+                <label class="stp-label">Размер фото</label>
+                <select id="stp-img-fit" class="stp-select">
+                  <option value="fill">Растянуть (fill)</option>
+                  <option value="cover">Заполнить (cover)</option>
+                  <option value="contain">Вписать (contain)</option>
+                  <option value="none">Исходный (none)</option>
+                </select>
+              </div>
+              <div class="stp-style-col">
+                <label class="stp-label">Положение фото</label>
+                <select id="stp-img-position" class="stp-select">
+                  <option value="center">Центр</option>
+                  <option value="top">Сверху</option>
+                  <option value="bottom">Снизу</option>
+                  <option value="left">Слева</option>
+                  <option value="right">Справа</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          ` : ''}
+
+          <!-- BACKGROUND IMAGE UPLOADER -->
+          <div class="stp-style-grid" style="margin-top: 6px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 10px;">
+            <div class="stp-style-col" style="grid-column: span 2;">
+              <label class="stp-label">Фоновое изображение</label>
+              <div class="stp-file-input-wrapper" style="display: flex; gap: 8px;">
+                <button class="stp-btn stp-btn-secondary" id="stp-btn-upload-bg-img" style="flex: 1; padding: 6px 12px; font-size: 11px;">Загрузить фон</button>
+                <input type="file" id="stp-upload-bg-img" accept="image/*" style="display:none;">
+                <button class="stp-btn stp-btn-danger" id="stp-btn-clear-bg-img" style="display: none; padding: 0 10px;" title="Удалить фон">&times;</button>
+              </div>
+            </div>
+          </div>
+          <!-- BACKGROUND OPTIONS -->
+          <div id="stp-bg-options" style="display: none; margin-top: 8px; gap: 8px; flex-direction: column;">
+            <div class="stp-style-grid">
+              <div class="stp-style-col">
+                <label class="stp-label">Размер фона</label>
+                <select id="stp-bg-size" class="stp-select">
+                  <option value="cover">Заполнить (cover)</option>
+                  <option value="contain">Вписать (contain)</option>
+                  <option value="auto">Авто (auto)</option>
+                </select>
+              </div>
+              <div class="stp-style-col">
+                <label class="stp-label">Позиция фона</label>
+                <select id="stp-bg-position" class="stp-select">
+                  <option value="center">Центр</option>
+                  <option value="top">Сверху</option>
+                  <option value="bottom">Снизу</option>
+                  <option value="left">Слева</option>
+                  <option value="right">Справа</option>
+                </select>
+              </div>
+            </div>
+            <div class="stp-style-grid" style="margin-top: 4px;">
+              <div class="stp-style-col" style="grid-column: span 2;">
+                <label class="stp-label">Повторение фона</label>
+                <select id="stp-bg-repeat" class="stp-select">
+                  <option value="no-repeat">Не повторять</option>
+                  <option value="repeat">Повторять</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="stp-actions" style="margin-top: 8px;">
+            <button class="stp-btn stp-btn-primary" id="stp-save-styles">
+              Сохранить стили
+            </button>
+            <button class="stp-btn stp-btn-warning" id="stp-reset-element-styles">
+              Сбросить стили
+            </button>
+          </div>
+        </div>
+
+        <!-- TAB 2: HTML EDIT -->
+        <div class="stp-tab-content" id="stp-tab-content-html">
+          <div>
+            <div class="stp-label" style="display: flex; justify-content: space-between; align-items: center;">
+              <span>HTML код элемента</span>
+              <button class="stp-btn stp-btn-secondary" id="stp-btn-insert-img-html" style="font-size: 11px; padding: 2px 8px; width: auto;">
+                Вставить фото
+              </button>
+              <input type="file" id="stp-insert-img-html" accept="image/*" style="display:none;">
+            </div>
+            <textarea class="stp-textarea" id="stp-html-input" spellcheck="false" style="height: 220px;"></textarea>
+          </div>
+
+          <div class="stp-actions" style="margin-top: 6px;">
+            <button class="stp-btn stp-btn-primary" id="stp-save-html">
+              Применить HTML
+            </button>
+            <button class="stp-btn stp-btn-secondary" id="stp-revert-html" title="Восстановить исходный HTML">
+              Сбросить HTML
+            </button>
+          </div>
+        </div>
+
+        <div class="stp-divider"></div>
+
+        <div class="stp-actions">
+          <button class="stp-btn stp-btn-warning" id="stp-hide-element" style="background: rgba(245, 158, 11, 0.15) !important;">
+            Скрыть
+          </button>
+          <button class="stp-btn stp-btn-danger" id="stp-remove-element">
+            Удалить
+          </button>
+        </div>
+
+        <div class="stp-actions">
+          <button class="stp-btn stp-btn-secondary" id="stp-finish-inspect" style="grid-column: span 2;">
+            Готово
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(inspectorModal);
+    makeModalDraggable(inspectorModal);
+
+    // Tab switching elements
+    const tabStyleBtn = document.getElementById('stp-tab-btn-style');
+    const tabHtmlBtn = document.getElementById('stp-tab-btn-html');
+    const tabStyleContent = document.getElementById('stp-tab-content-style');
+    const tabHtmlContent = document.getElementById('stp-tab-content-html');
+
+    tabStyleBtn.onclick = () => {
+      tabStyleBtn.classList.add('active');
+      tabHtmlBtn.classList.remove('active');
+      tabStyleContent.classList.add('active');
+      tabHtmlContent.classList.remove('active');
+    };
+
+    tabHtmlBtn.onclick = () => {
+      tabHtmlBtn.classList.add('active');
+      tabStyleBtn.classList.remove('active');
+      tabHtmlContent.classList.add('active');
+      tabStyleContent.classList.remove('active');
+    };
+
+    // Pre-populate visually with computed values
+    const computed = window.getComputedStyle(el);
+    const textColHex = rgbToHex(computed.color);
+    const bgColHex = rgbToHex(computed.backgroundColor);
+
+    const colorText = document.getElementById('stp-color-text');
+    const colorTextHex = document.getElementById('stp-color-text-hex');
+    const colorBg = document.getElementById('stp-color-bg');
+    const colorBgHex = document.getElementById('stp-color-bg-hex');
+    const fontSize = document.getElementById('stp-font-size');
+    const fontSizeVal = document.getElementById('stp-font-size-val');
+    const borderRadius = document.getElementById('stp-border-radius');
+    const borderRadiusVal = document.getElementById('stp-border-radius-val');
+    const opacity = document.getElementById('stp-opacity');
+    const opacityVal = document.getElementById('stp-opacity-val');
+    const paddingInput = document.getElementById('stp-padding');
+    const marginInput = document.getElementById('stp-margin');
+
+    // Image/Background controls
+    const uploadBgImg = document.getElementById('stp-upload-bg-img');
+    const btnUploadBgImg = document.getElementById('stp-btn-upload-bg-img');
+    const btnClearBgImg = document.getElementById('stp-btn-clear-bg-img');
+
+    colorText.value = textColHex;
+    colorTextHex.value = textColHex;
+    colorBg.value = bgColHex;
+    colorBgHex.value = bgColHex;
+
+    const currentFSize = parseFloat(computed.fontSize);
+    fontSize.value = currentFSize;
+    fontSizeVal.textContent = currentFSize + 'px';
+
+    const currentBRad = parseFloat(computed.borderRadius) || 0;
+    borderRadius.value = currentBRad;
+    borderRadiusVal.textContent = currentBRad + 'px';
+
+    const currentOp = Math.round(parseFloat(computed.opacity) * 100) || 100;
+    opacity.value = currentOp;
+    opacityVal.textContent = currentOp + '%';
+
+    paddingInput.value = parseInt(computed.paddingTop) || '';
+    marginInput.value = parseInt(computed.marginTop) || '';
+
+    // Pre-populate custom HTML
+    document.getElementById('stp-html-input').value = el.innerHTML;
+
+    // Background options container and elements
+    const bgOptionsContainer = document.getElementById('stp-bg-options');
+    const selectBgSize = document.getElementById('stp-bg-size');
+    const selectBgPosition = document.getElementById('stp-bg-position');
+    const selectBgRepeat = document.getElementById('stp-bg-repeat');
+
+    // Prepopulate background styling values
+    if (computed.backgroundImage && computed.backgroundImage !== 'none') {
+      btnClearBgImg.style.display = 'block';
+      if (bgOptionsContainer) bgOptionsContainer.style.display = 'flex';
+      
+      if (selectBgSize) {
+        const sz = el.style.backgroundSize || computed.backgroundSize;
+        if (['cover', 'contain', 'auto'].includes(sz)) selectBgSize.value = sz;
+      }
+      if (selectBgPosition) {
+        const pos = el.style.backgroundPosition || computed.backgroundPosition;
+        if (pos.includes('top')) selectBgPosition.value = 'top';
+        else if (pos.includes('bottom')) selectBgPosition.value = 'bottom';
+        else if (pos.includes('left')) selectBgPosition.value = 'left';
+        else if (pos.includes('right')) selectBgPosition.value = 'right';
+        else selectBgPosition.value = 'center';
+      }
+      if (selectBgRepeat) {
+        const rep = el.style.backgroundRepeat || computed.backgroundRepeat;
+        if (rep.includes('no-repeat')) selectBgRepeat.value = 'no-repeat';
+        else if (rep.includes('repeat')) selectBgRepeat.value = 'repeat';
+      }
+    }
+
+    // Pre-populate tag image styling values
+    let selectImgFit = null;
+    let selectImgPosition = null;
+    if (isImgTag) {
+      const imgOptionsContainer = document.getElementById('stp-img-options');
+      selectImgFit = document.getElementById('stp-img-fit');
+      selectImgPosition = document.getElementById('stp-img-position');
+      
+      if (imgOptionsContainer) imgOptionsContainer.style.display = 'flex';
+      if (el.hasAttribute('data-stp-original-src')) {
+        document.getElementById('stp-btn-revert-img-src').style.display = 'block';
+      }
+      
+      if (selectImgFit) {
+        const fit = el.style.objectFit || computed.objectFit;
+        if (['fill', 'cover', 'contain', 'none'].includes(fit)) selectImgFit.value = fit;
+      }
+      if (selectImgPosition) {
+        const pos = el.style.objectPosition || computed.objectPosition;
+        if (pos.includes('top')) selectImgPosition.value = 'top';
+        else if (pos.includes('bottom')) selectImgPosition.value = 'bottom';
+        else if (pos.includes('left')) selectImgPosition.value = 'left';
+        else if (pos.includes('right')) selectImgPosition.value = 'right';
+        else selectImgPosition.value = 'center';
+      }
+    }
+
+    // Live update bindings
+    colorText.oninput = () => {
+      colorTextHex.value = colorText.value;
+      applyLiveStyles();
+    };
+    colorTextHex.oninput = () => {
+      if (/^#[0-9A-F]{6}$/i.test(colorTextHex.value)) {
+        colorText.value = colorTextHex.value;
+        applyLiveStyles();
+      }
+    };
+
+    colorBg.oninput = () => {
+      colorBgHex.value = colorBg.value;
+      applyLiveStyles();
+    };
+    colorBgHex.oninput = () => {
+      if (/^#[0-9A-F]{6}$/i.test(colorBgHex.value)) {
+        colorBg.value = colorBgHex.value;
+        applyLiveStyles();
+      }
+    };
+
+    fontSize.oninput = () => {
+      fontSizeVal.textContent = fontSize.value + 'px';
+      applyLiveStyles();
+    };
+
+    borderRadius.oninput = () => {
+      borderRadiusVal.textContent = borderRadius.value + 'px';
+      applyLiveStyles();
+    };
+
+    opacity.oninput = () => {
+      opacityVal.textContent = opacity.value + '%';
+      applyLiveStyles();
+    };
+
+    paddingInput.oninput = applyLiveStyles;
+    marginInput.oninput = applyLiveStyles;
+
+    function applyLiveStyles() {
+      el.style.setProperty('color', colorText.value, 'important');
+      el.style.setProperty('background-color', colorBg.value, 'important');
+      el.style.setProperty('font-size', fontSize.value + 'px', 'important');
+      el.style.setProperty('border-radius', borderRadius.value + 'px', 'important');
+      el.style.setProperty('opacity', (opacity.value / 100).toString(), 'important');
+      
+      if (paddingInput.value !== '') {
+        el.style.setProperty('padding', paddingInput.value + 'px', 'important');
+      } else {
+        el.style.removeProperty('padding');
+      }
+
+      if (marginInput.value !== '') {
+        el.style.setProperty('margin', marginInput.value + 'px', 'important');
+      } else {
+        el.style.removeProperty('margin');
+      }
+
+      // Live apply background image helper rules
+      const hasBg = el.style.backgroundImage && el.style.backgroundImage !== 'none';
+      if (hasBg) {
+        if (selectBgSize && selectBgSize.value) {
+          el.style.setProperty('background-size', selectBgSize.value, 'important');
+        }
+        if (selectBgPosition && selectBgPosition.value) {
+          el.style.setProperty('background-position', selectBgPosition.value, 'important');
+        }
+        if (selectBgRepeat && selectBgRepeat.value) {
+          el.style.setProperty('background-repeat', selectBgRepeat.value, 'important');
+        }
+      }
+
+      // Live apply photo img object fit helper rules
+      if (isImgTag) {
+        if (selectImgFit && selectImgFit.value) {
+          el.style.setProperty('object-fit', selectImgFit.value, 'important');
+        }
+        if (selectImgPosition && selectImgPosition.value) {
+          el.style.setProperty('object-position', selectImgPosition.value, 'important');
+        }
+      }
+    }
+
+    // Bind dropdown selectors live updates
+    if (selectBgSize) selectBgSize.onchange = applyLiveStyles;
+    if (selectBgPosition) selectBgPosition.onchange = applyLiveStyles;
+    if (selectBgRepeat) selectBgRepeat.onchange = applyLiveStyles;
+    if (isImgTag) {
+      if (selectImgFit) selectImgFit.onchange = applyLiveStyles;
+      if (selectImgPosition) selectImgPosition.onchange = applyLiveStyles;
+    }
+
+    // BG Image upload
+    btnUploadBgImg.onclick = () => uploadBgImg.click();
+    uploadBgImg.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      showToast('Сжатие фонового изображения...');
+      compressAndResizeImage(file, 1200, 0.8).then((dataUrl) => {
+        el.style.setProperty('background-image', `url("${dataUrl}")`, 'important');
+        btnClearBgImg.style.display = 'block';
+        if (bgOptionsContainer) bgOptionsContainer.style.display = 'flex';
+        applyLiveStyles();
+        showToast('Фоновое изображение установлено!');
+      }).catch((err) => {
+        showToast('Ошибка сжатия изображения');
+      });
+    };
+
+    btnClearBgImg.onclick = () => {
+      el.style.removeProperty('background-image');
+      el.style.removeProperty('background-size');
+      el.style.removeProperty('background-position');
+      el.style.removeProperty('background-repeat');
+      uploadBgImg.value = '';
+      btnClearBgImg.style.display = 'none';
+      if (bgOptionsContainer) bgOptionsContainer.style.display = 'none';
+      showToast('Фоновое изображение удалено.');
+    };
+
+    // IMG Tag Src replacement
+    if (isImgTag) {
+      const uploadImgSrc = document.getElementById('stp-upload-img-src');
+      const btnUploadImgSrc = document.getElementById('stp-btn-upload-img-src');
+      const btnRevertImgSrc = document.getElementById('stp-btn-revert-img-src');
+
+      btnUploadImgSrc.onclick = () => uploadImgSrc.click();
+      uploadImgSrc.onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        showToast('Сжатие изображения...');
+        compressAndResizeImage(file, 1200, 0.8).then((dataUrl) => {
+          if (!el.hasAttribute('data-stp-original-src')) {
+            el.setAttribute('data-stp-original-src', el.getAttribute('src') || '');
+          }
+          el.src = dataUrl;
+
+          const imgOptionsContainer = document.getElementById('stp-img-options');
+          if (imgOptionsContainer) imgOptionsContainer.style.display = 'flex';
+          applyLiveStyles();
+
+          const rule = {
+            id: 'rule_' + Date.now(),
+            selector,
+            action: 'edit_attribute',
+            attribute: 'src',
+            value: dataUrl,
+            active: true
+          };
+
+          addOrUpdateHTMLRule(rule);
+          btnRevertImgSrc.style.display = 'block';
+          showToast('Изображение заменено!');
+        }).catch((err) => {
+          showToast('Ошибка сжатия изображения');
+        });
+      };
+
+      btnRevertImgSrc.onclick = () => {
+        if (el.hasAttribute('data-stp-original-src')) {
+          el.src = el.getAttribute('data-stp-original-src');
+          el.removeAttribute('data-stp-original-src');
+        }
+        
+        el.style.removeProperty('object-fit');
+        el.style.removeProperty('object-position');
+        const imgOptionsContainer = document.getElementById('stp-img-options');
+        if (imgOptionsContainer) imgOptionsContainer.style.display = 'none';
+
+        if (currentDomainTweaks.htmlRules) {
+          currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
+            r => !(r.selector === selector && r.action === 'edit_attribute' && r.attribute === 'src')
+          );
+          saveCurrentDomainTweaks();
+        }
+
+        btnRevertImgSrc.style.display = 'none';
+        uploadImgSrc.value = '';
+        showToast('Изображение сброшено до оригинала.');
+      };
+    }
+
+    // Insert Image in HTML Editor Textarea
+    const insertImgHtml = document.getElementById('stp-insert-img-html');
+    const btnInsertImgHtml = document.getElementById('stp-btn-insert-img-html');
+
+    btnInsertImgHtml.onclick = () => insertImgHtml.click();
+    insertImgHtml.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      showToast('Сжатие изображения...');
+      compressAndResizeImage(file, 1200, 0.8).then((dataUrl) => {
+        const textarea = document.getElementById('stp-html-input');
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const imgTag = `<img src="${dataUrl}" style="max-width: 100%; height: auto;">`;
+        textarea.value = textarea.value.substring(0, start) + imgTag + textarea.value.substring(end);
+        textarea.selectionStart = textarea.selectionEnd = start + imgTag.length;
+        textarea.focus();
+        showToast('Изображение вставлено в HTML!');
+      }).catch((err) => {
+        showToast('Ошибка сжатия изображения');
+      });
+      insertImgHtml.value = '';
+    };
+
+    // Save visual style rule
+    document.getElementById('stp-save-styles').onclick = () => {
+      const stylesObj = {
+        'color': colorText.value,
+        'background-color': colorBg.value,
+        'font-size': fontSize.value + 'px',
+        'border-radius': borderRadius.value + 'px',
+        'opacity': (opacity.value / 100).toString()
+      };
+
+      if (paddingInput.value !== '') {
+        stylesObj['padding'] = paddingInput.value + 'px';
+      }
+      if (marginInput.value !== '') {
+        stylesObj['margin'] = marginInput.value + 'px';
+      }
+
+      const bgImg = el.style.backgroundImage;
+      if (bgImg && bgImg !== 'none') {
+        stylesObj['background-image'] = bgImg;
+        if (selectBgSize && selectBgSize.value) {
+          stylesObj['background-size'] = selectBgSize.value;
+        }
+        if (selectBgPosition && selectBgPosition.value) {
+          stylesObj['background-position'] = selectBgPosition.value;
+        }
+        if (selectBgRepeat && selectBgRepeat.value) {
+          stylesObj['background-repeat'] = selectBgRepeat.value;
+        }
+      }
+
+      if (isImgTag) {
+        if (selectImgFit && selectImgFit.value) {
+          stylesObj['object-fit'] = selectImgFit.value;
+        }
+        if (selectImgPosition && selectImgPosition.value) {
+          stylesObj['object-position'] = selectImgPosition.value;
+        }
+      }
+
+      const rule = {
+        id: 'rule_' + Date.now(),
+        selector,
+        action: 'edit_style',
+        value: stylesObj,
+        active: true
+      };
+
+      addOrUpdateHTMLRule(rule);
+      showToast('Визуальные стили элемента сохранены!');
+    };
+
+    // Reset visual styles
+    document.getElementById('stp-reset-element-styles').onclick = () => {
+      el.style.removeProperty('color');
+      el.style.removeProperty('background-color');
+      el.style.removeProperty('font-size');
+      el.style.removeProperty('border-radius');
+      el.style.removeProperty('opacity');
+      el.style.removeProperty('padding');
+      el.style.removeProperty('margin');
+      el.style.removeProperty('background-image');
+      el.style.removeProperty('background-size');
+      el.style.removeProperty('background-position');
+      el.style.removeProperty('background-repeat');
+      el.style.removeProperty('object-fit');
+      el.style.removeProperty('object-position');
+
+      if (currentDomainTweaks.htmlRules) {
+        currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
+          r => !(r.selector === selector && r.action === 'edit_style')
+        );
+        saveCurrentDomainTweaks();
+      }
+
+      // Re-populate computed styles
+      const currentComputed = window.getComputedStyle(el);
+      const hexText = rgbToHex(currentComputed.color);
+      const hexBg = rgbToHex(currentComputed.backgroundColor);
+      colorText.value = hexText;
+      colorTextHex.value = hexText;
+      colorBg.value = hexBg;
+      colorBgHex.value = hexBg;
+      fontSize.value = parseFloat(currentComputed.fontSize);
+      fontSizeVal.textContent = currentComputed.fontSize;
+      borderRadius.value = parseFloat(currentComputed.borderRadius) || 0;
+      borderRadiusVal.textContent = (parseFloat(currentComputed.borderRadius) || 0) + 'px';
+      opacity.value = parseFloat(currentComputed.opacity) * 100 || 100;
+      opacityVal.textContent = Math.round(parseFloat(currentComputed.opacity) * 100 || 100) + '%';
+      paddingInput.value = '';
+      marginInput.value = '';
+      btnClearBgImg.style.display = 'none';
+      if (bgOptionsContainer) bgOptionsContainer.style.display = 'none';
+      if (isImgTag) {
+        const imgOptionsContainer = document.getElementById('stp-img-options');
+        if (imgOptionsContainer) imgOptionsContainer.style.display = 'none';
+      }
+
+      showToast('Стили элемента сброшены до исходных.');
+    };
+
+    // Event Handlers for close and save
+    document.getElementById('stp-modal-close').onclick = () => inspectorModal.remove();
+    document.getElementById('stp-finish-inspect').onclick = () => toggleInspectorMode(false);
+
+    // Save HTML Action
+    document.getElementById('stp-save-html').onclick = () => {
+      const newHTML = document.getElementById('stp-html-input').value;
+      if (!el.hasAttribute('data-stp-original-html')) {
+        el.setAttribute('data-stp-original-html', el.innerHTML);
+      }
+      el.innerHTML = newHTML;
+
+      const rule = {
+        id: 'rule_' + Date.now(),
+        selector,
+        action: 'edit_html',
+        value: newHTML,
+        active: true
+      };
+
+      addOrUpdateHTMLRule(rule);
+      showToast('HTML код элемента изменен и сохранен!');
+    };
+
+    // Revert HTML Action
+    document.getElementById('stp-revert-html').onclick = () => {
+      if (el.hasAttribute('data-stp-original-html')) {
+        el.innerHTML = el.getAttribute('data-stp-original-html');
+        el.removeAttribute('data-stp-original-html');
+        el.removeAttribute('data-stp-modified-html');
+      }
+
+      document.getElementById('stp-html-input').value = el.innerHTML;
+
+      if (currentDomainTweaks.htmlRules) {
+        currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
+          r => !(r.selector === selector && r.action === 'edit_html')
+        );
+        saveCurrentDomainTweaks();
+      }
+
+      showToast('HTML код элемента сброшен до исходного.');
+    };
+
+    // Hide Action
+    document.getElementById('stp-hide-element').onclick = () => {
+      el.style.setProperty('display', 'none', 'important');
+
+      const rule = {
+        id: 'rule_' + Date.now(),
+        selector,
+        action: 'hide',
+        value: '',
+        active: true
+      };
+
+      addOrUpdateHTMLRule(rule);
+      showToast('Элемент успешно скрыт.');
+      inspectorModal.remove();
+    };
+
+    // Remove Action
+    document.getElementById('stp-remove-element').onclick = () => {
+      el.remove();
+
+      const rule = {
+        id: 'rule_' + Date.now(),
+        selector,
+        action: 'remove',
+        value: '',
+        active: true
+      };
+
+      addOrUpdateHTMLRule(rule);
+      showToast('Элемент успешно удален.');
+      inspectorModal.remove();
+    };
+  }
+
+  function addOrUpdateHTMLRule(newRule) {
+    if (!currentDomainTweaks.htmlRules) {
+      currentDomainTweaks.htmlRules = [];
+    }
+
+    // Replace existing rule with same selector or push new
+    const existingIndex = currentDomainTweaks.htmlRules.findIndex(r => r.selector === newRule.selector && r.action === newRule.action);
+    if (existingIndex >= 0) {
+      currentDomainTweaks.htmlRules[existingIndex] = newRule;
+    } else {
+      currentDomainTweaks.htmlRules.push(newRule);
+    }
+
+    saveCurrentDomainTweaks();
+  }
+
+  function makeModalDraggable(modal) {
+    const handle = modal.querySelector('#stp-drag-handle');
+    let isDragging = false;
+    let offsetX, offsetY;
+
+    handle.addEventListener('mousedown', (e) => {
+      if (e.target.closest('#stp-modal-close')) return;
+      isDragging = true;
+      offsetX = e.clientX - modal.getBoundingClientRect().left;
+      offsetY = e.clientY - modal.getBoundingClientRect().top;
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      modal.style.left = `${e.clientX - offsetX}px`;
+      modal.style.top = `${e.clientY - offsetY}px`;
+      modal.style.bottom = 'auto';
+      modal.style.right = 'auto';
+    });
+
+    document.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+  }
+
+  function showToast(message) {
+    const existingToast = document.querySelector('.site-tweaker-toast');
+    if (existingToast) existingToast.remove();
+
+    const toast = document.createElement('div');
+    toast.className = 'site-tweaker-toast';
+    toast.innerHTML = `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+      </svg>
+      <span>${escapeHTML(message)}</span>
+    `;
+
+    document.body.appendChild(toast);
+    setTimeout(() => {
+      if (toast) toast.remove();
+    }, 3000);
+  }
+
+  function escapeHTML(str) {
+    if (typeof str !== 'string') return '';
+    return str.replace(/[&<>"']/g, (m) => {
+      switch (m) {
+        case '&': return '&amp;';
+        case '<': return '&lt;';
+        case '>': return '&gt;';
+        case '"': return '&quot;';
+        case "'": return '&#039;';
+        default: return m;
+      }
+    });
+  }
+
+})();
