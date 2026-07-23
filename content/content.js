@@ -22,6 +22,7 @@
   let inspectorModal = null;
   let currentDomainTweaks = { css: '', htmlRules: [], enabled: true };
   let mutationObserver = null;
+  let copiedStyles = null;
 
   // Image compression and resize helper (downscale to max 1200px and compress to 0.8 JPEG quality)
   function compressAndResizeImage(file, maxDimension = 1200, quality = 0.8) {
@@ -509,6 +510,11 @@
               <div class="stp-color-input-wrapper">
                 <input type="color" id="stp-color-text" class="stp-color-input">
                 <input type="text" id="stp-color-text-hex" class="stp-text-input-mini" placeholder="Auto">
+                <button class="stp-eyedropper-btn" id="stp-btn-eyedropper-text" title="Выбрать цвет с экрана">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="m2 22 1-1c.6.6 1.4.6 2 0l7-7-2-2-7 7c-.6.6-.6 1.4 0 2l-1 1Zm11-11 7-7c.6-.6.6-1.4 0-2l-2-2c-.6-.6-1.4-.6-2 0l-7 7 4 4Z"/>
+                  </svg>
+                </button>
               </div>
             </div>
             <div class="stp-style-col">
@@ -516,6 +522,11 @@
               <div class="stp-color-input-wrapper">
                 <input type="color" id="stp-color-bg" class="stp-color-input">
                 <input type="text" id="stp-color-bg-hex" class="stp-text-input-mini" placeholder="Auto">
+                <button class="stp-eyedropper-btn" id="stp-btn-eyedropper-bg" title="Выбрать цвет с экрана">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="m2 22 1-1c.6.6 1.4.6 2 0l7-7-2-2-7 7c-.6.6-.6 1.4 0 2l-1 1Zm11-11 7-7c.6-.6.6-1.4 0-2l-2-2c-.6-.6-1.4-.6-2 0l-7 7 4 4Z"/>
+                  </svg>
+                </button>
               </div>
             </div>
           </div>
@@ -622,7 +633,18 @@
                   <option value="bottom">Снизу</option>
                   <option value="left">Слева</option>
                   <option value="right">Справа</option>
+                  <option value="custom">Вручную (px)</option>
                 </select>
+              </div>
+            </div>
+            <div id="stp-bg-custom-position" class="stp-style-grid" style="display: none; margin-top: 4px;">
+              <div class="stp-style-col">
+                <label class="stp-label">Смещение X (px)</label>
+                <input type="number" id="stp-bg-pos-x" class="stp-num-input" placeholder="0">
+              </div>
+              <div class="stp-style-col">
+                <label class="stp-label">Смещение Y (px)</label>
+                <input type="number" id="stp-bg-pos-y" class="stp-num-input" placeholder="0">
               </div>
             </div>
             <div class="stp-style-grid" style="margin-top: 4px;">
@@ -778,6 +800,14 @@
         else if (pos.includes('bottom')) selectBgPosition.value = 'bottom';
         else if (pos.includes('left')) selectBgPosition.value = 'left';
         else if (pos.includes('right')) selectBgPosition.value = 'right';
+        else if (pos.includes('px') || /^-?\d+/.test(pos)) {
+          selectBgPosition.value = 'custom';
+          const parts = pos.split(' ');
+          if (parts[0]) document.getElementById('stp-bg-pos-x').value = parseInt(parts[0]) || 0;
+          if (parts[1]) document.getElementById('stp-bg-pos-y').value = parseInt(parts[1]) || 0;
+          const customPosBlock = document.getElementById('stp-bg-custom-position');
+          if (customPosBlock) customPosBlock.style.display = 'flex';
+        }
         else selectBgPosition.value = 'center';
       }
       if (selectBgRepeat) {
@@ -837,6 +867,48 @@
       }
     };
 
+    // Text color Eyedropper API
+    const btnEyedropperText = document.getElementById('stp-btn-eyedropper-text');
+    if (btnEyedropperText) {
+      if (!window.EyeDropper) {
+        btnEyedropperText.style.display = 'none';
+      } else {
+        btnEyedropperText.onclick = () => {
+          const eyeDropper = new EyeDropper();
+          eyeDropper.open().then((result) => {
+            const hexColor = result.sRGBHex;
+            colorText.value = hexColor;
+            colorTextHex.value = hexColor.toUpperCase();
+            applyLiveStyles();
+            showToast('Цвет текста выбран с экрана!');
+          }).catch((err) => {
+            // Eyedropper cancelled
+          });
+        };
+      }
+    }
+
+    // Background color Eyedropper API
+    const btnEyedropperBg = document.getElementById('stp-btn-eyedropper-bg');
+    if (btnEyedropperBg) {
+      if (!window.EyeDropper) {
+        btnEyedropperBg.style.display = 'none';
+      } else {
+        btnEyedropperBg.onclick = () => {
+          const eyeDropper = new EyeDropper();
+          eyeDropper.open().then((result) => {
+            const hexColor = result.sRGBHex;
+            colorBg.value = hexColor;
+            colorBgHex.value = hexColor.toUpperCase();
+            applyLiveStyles();
+            showToast('Цвет фона выбран с экрана!');
+          }).catch((err) => {
+            // Eyedropper cancelled
+          });
+        };
+      }
+    }
+
     fontSize.oninput = () => {
       fontSizeVal.textContent = fontSize.value + 'px';
       applyLiveStyles();
@@ -881,7 +953,13 @@
           el.style.setProperty('background-size', selectBgSize.value, 'important');
         }
         if (selectBgPosition && selectBgPosition.value) {
-          el.style.setProperty('background-position', selectBgPosition.value, 'important');
+          if (selectBgPosition.value === 'custom') {
+            const posX = document.getElementById('stp-bg-pos-x').value || '0';
+            const posY = document.getElementById('stp-bg-pos-y').value || '0';
+            el.style.setProperty('background-position', `${posX}px ${posY}px`, 'important');
+          } else {
+            el.style.setProperty('background-position', selectBgPosition.value, 'important');
+          }
         }
         if (selectBgRepeat && selectBgRepeat.value) {
           el.style.setProperty('background-repeat', selectBgRepeat.value, 'important');
@@ -901,7 +979,23 @@
 
     // Bind dropdown selectors live updates
     if (selectBgSize) selectBgSize.onchange = applyLiveStyles;
-    if (selectBgPosition) selectBgPosition.onchange = applyLiveStyles;
+    if (selectBgPosition) {
+      selectBgPosition.onchange = () => {
+        const customBlock = document.getElementById('stp-bg-custom-position');
+        if (selectBgPosition.value === 'custom') {
+          if (customBlock) customBlock.style.display = 'flex';
+        } else {
+          if (customBlock) customBlock.style.display = 'none';
+        }
+        applyLiveStyles();
+      };
+    }
+
+    const inputBgPosX = document.getElementById('stp-bg-pos-x');
+    const inputBgPosY = document.getElementById('stp-bg-pos-y');
+    if (inputBgPosX) inputBgPosX.oninput = applyLiveStyles;
+    if (inputBgPosY) inputBgPosY.oninput = applyLiveStyles;
+
     if (selectBgRepeat) selectBgRepeat.onchange = applyLiveStyles;
     if (isImgTag) {
       if (selectImgFit) selectImgFit.onchange = applyLiveStyles;
@@ -1049,7 +1143,13 @@
           stylesObj['background-size'] = selectBgSize.value;
         }
         if (selectBgPosition && selectBgPosition.value) {
-          stylesObj['background-position'] = selectBgPosition.value;
+          if (selectBgPosition.value === 'custom') {
+            const posX = document.getElementById('stp-bg-pos-x').value || '0';
+            const posY = document.getElementById('stp-bg-pos-y').value || '0';
+            stylesObj['background-position'] = `${posX}px ${posY}px`;
+          } else {
+            stylesObj['background-position'] = selectBgPosition.value;
+          }
         }
         if (selectBgRepeat && selectBgRepeat.value) {
           stylesObj['background-repeat'] = selectBgRepeat.value;

@@ -442,3 +442,21 @@
 .stp-select:focus {
   border-color: #6366f1 !important;
 }
+
+.stp-eyedropper-btn {
+  background: none !important;
+  border: none !important;
+  color: #94a3b8 !important;
+  cursor: pointer !important;
+  padding: 2px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: color 0.2s !important;
+  margin-left: 2px !important;
+}
+
+.stp-eyedropper-btn:hover {
+  color: #818cf8 !important;
+}
+
