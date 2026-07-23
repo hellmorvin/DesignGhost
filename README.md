@@ -12,11 +12,19 @@
 
 ## Скриншоты работы проекта / Preview
 
-![Редактор кастомных CSS стилей](assets/screenshot1.png)
-
-![Инспектор элементов DOM на странице](assets/screenshot2.png)
-
-![Настройки кастомных правил элементов](assets/screenshot3.png)
+<p align="center">
+  <kbd>
+    <img src="assets/screenshot1.png" width="260" alt="Редактор кастомных CSS стилей">
+  </kbd>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <kbd>
+    <img src="assets/screenshot2.png" width="260" alt="Раздел инспектора DOM">
+  </kbd>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <kbd>
+    <img src="assets/screenshot3.png" width="260" alt="Настройки правил элементов">
+  </kbd>
+</p>
 
 ---
 
