@@ -110,10 +110,10 @@
         const activeScopes = storageResult.activeScopes || {};
         
         // Determine whether page-specific or domain-specific settings exist
-        if (activeScopes[activeHostname] === 'page' || allTweaks[activeUrl]) {
-          storageKey = activeUrl;
-        } else {
+        if (activeScopes[activeHostname] === 'domain') {
           storageKey = activeHostname;
+        } else {
+          storageKey = activeUrl;
         }
         
         const domainData = allTweaks[storageKey] || { css: '', js: '', html: '', htmlRules: [], enabled: true };

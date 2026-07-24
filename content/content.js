@@ -41,6 +41,8 @@
   let highlightTag = null;
   let inspectorModal = null;
   let currentDomainTweaks = { css: '', htmlRules: [], enabled: true };
+  let activeDomainTweaks = { css: '', htmlRules: [], enabled: true };
+  let activePageTweaks = { css: '', htmlRules: [], enabled: true };
   let mutationObserver = null;
   let copiedStyles = null;
 
@@ -187,10 +189,13 @@
       const allTweaks = result.siteTweaks || {};
       const activeScopes = result.activeScopes || {};
       
-      activeScope = activeScopes[hostname] || 'domain';
+      activeScope = activeScopes[hostname] || 'page';
       
       const domainData = allTweaks[hostname] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
       const pageData = allTweaks[normalizeUrl(window.location.href)] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
+
+      activeDomainTweaks = domainData;
+      activePageTweaks = pageData;
 
       // currentDomainTweaks represents the settings of the ACTIVE scope (either page or domain)
       currentDomainTweaks = (activeScope === 'page') ? pageData : domainData;
@@ -208,7 +213,7 @@
           mergedJs += (domainData.js || '');
         }
 
-        if (pageData.enabled !== false) {
+        if (activeScope === 'page' && pageData.enabled !== false) {
           mergedCss += '\n' + (pageData.css || '');
           const pageRules = pageData.htmlRules || [];
           pageRules.forEach(pRule => {
@@ -491,7 +496,7 @@
     chrome.storage.local.get(['siteTweaks', 'activeScopes'], (result) => {
       const allTweaks = result.siteTweaks || {};
       const activeScopes = result.activeScopes || {};
-      const currentScope = activeScopes[hostname] || 'domain';
+      const currentScope = activeScopes[hostname] || 'page';
       const key = (currentScope === 'page') ? normalizeUrl(window.location.href) : hostname;
 
       allTweaks[key] = currentDomainTweaks;
