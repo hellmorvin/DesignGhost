@@ -8,6 +8,8 @@
 
   let activeTab = null;
   let activeHostname = '';
+  let activeUrl = '';
+  let storageKey = '';
   let activeDomainData = { css: '', htmlRules: [], enabled: true };
 
   // Image compression and resize helper (downscale to max 1200px and compress to 0.8 JPEG quality)
@@ -63,6 +65,7 @@
       
       const tab = tabs[0];
       activeTab = tab;
+      activeUrl = tab.url;
 
       if (!tab.url || 
           tab.url.startsWith('chrome://') || 
@@ -83,9 +86,18 @@
       }
 
       // Load directly from local storage first to prevent race conditions
-      chrome.storage.local.get(['siteTweaks'], (storageResult) => {
+      chrome.storage.local.get(['siteTweaks', 'activeScopes'], (storageResult) => {
         const allTweaks = storageResult.siteTweaks || {};
-        const domainData = allTweaks[activeHostname] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
+        const activeScopes = storageResult.activeScopes || {};
+        
+        // Determine whether page-specific or domain-specific settings exist
+        if (activeScopes[activeHostname] === 'page' || allTweaks[activeUrl]) {
+          storageKey = activeUrl;
+        } else {
+          storageKey = activeHostname;
+        }
+        
+        const domainData = allTweaks[storageKey] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
 
         // Query the content script for inspector status
         chrome.tabs.sendMessage(tab.id, { action: 'GET_DOM_INFO' }, (response) => {
@@ -111,6 +123,8 @@
     // Populate the general Settings Sites and Backups
     renderSitesList();
     setupBackupControls();
+    setupConsole();
+    setupDOMSearch();
   }
 
   // Inject content script and stylesheet if missing
@@ -171,8 +185,8 @@
       
       chrome.storage.local.get(['siteTweaks'], (result) => {
         const allTweaks = result.siteTweaks || {};
-        allTweaks[activeHostname] = {
-          ...allTweaks[activeHostname],
+        allTweaks[storageKey] = {
+          ...allTweaks[storageKey],
           enabled: isEnabled
         };
         chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
@@ -182,6 +196,49 @@
         });
       });
     };
+
+    // Scope Selection Binding
+    const scopeSelect = document.getElementById('scope-select');
+    if (scopeSelect) {
+      scopeSelect.value = (storageKey === activeUrl) ? 'page' : 'domain';
+      scopeSelect.onchange = (e) => {
+        const newScope = e.target.value;
+        storageKey = (newScope === 'page') ? activeUrl : activeHostname;
+        
+        chrome.storage.local.get(['siteTweaks', 'activeScopes'], (res) => {
+          const activeScopes = res.activeScopes || {};
+          activeScopes[activeHostname] = newScope;
+          chrome.storage.local.set({ activeScopes });
+          
+          const tweaks = res.siteTweaks || {};
+          const activeData = tweaks[storageKey] || { css: '', htmlRules: [], enabled: true };
+          
+          activeDomainData = {
+            css: activeData.css || '',
+            htmlRules: activeData.htmlRules || [],
+            enabled: activeData.enabled !== false
+          };
+          
+          const cssEditor = document.getElementById('css-editor');
+          if (cssEditor) {
+            cssEditor.value = activeDomainData.css;
+            const lineNumbers = document.getElementById('editor-line-numbers');
+            if (lineNumbers) {
+              const count = cssEditor.value.split('\n').length;
+              let htmlStr = '';
+              for (let i = 1; i <= count; i++) {
+                htmlStr += i + '<br>';
+              }
+              lineNumbers.innerHTML = htmlStr;
+            }
+          }
+          
+          domainToggle.checked = activeDomainData.enabled;
+          renderHTMLRulesList();
+          showStatus(newScope === 'page' ? 'Смена области: страница' : 'Смена области: домен', 'online');
+        });
+      };
+    }
 
     // Helper to make gutters scroll-synced, tab-indented, and bracket-closed
     function makeEditorInteractive(textareaId, gutterId) {
@@ -297,8 +354,8 @@
       
       chrome.storage.local.get(['siteTweaks'], (result) => {
         const allTweaks = result.siteTweaks || {};
-        allTweaks[activeHostname] = {
-          ...allTweaks[activeHostname],
+        allTweaks[storageKey] = {
+          ...allTweaks[storageKey],
           css: newCss
         };
         chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
@@ -325,6 +382,7 @@
         css = css.replace(/,\s*/g, ', ');
         css = css.replace(/:\s*/g, ': ');
         css = css.replace(/;/g, ';\n  '); // Double safety for declarations
+        css = css.replace(/;/g, ';\n  ');
         css = css.replace(/;\s*([a-zA-Z\-])/g, ';\n  $1');
 
         let lines = css.split('\n');
@@ -357,8 +415,8 @@
         
         chrome.storage.local.get(['siteTweaks'], (result) => {
           const allTweaks = result.siteTweaks || {};
-          if (allTweaks[activeHostname]) {
-            allTweaks[activeHostname].css = '';
+          if (allTweaks[storageKey]) {
+            allTweaks[storageKey].css = '';
           }
           chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
             chrome.tabs.sendMessage(activeTab.id, { action: 'APPLY_CUSTOM_CSS', css: '' }, () => {
@@ -401,10 +459,11 @@
     const resetDomainBtn = document.getElementById('btn-reset-domain');
     resetDomainBtn.disabled = false;
     resetDomainBtn.onclick = () => {
-      if (confirm(`Вы уверены, что хотите сбросить все изменения для сайта ${activeHostname}?`)) {
+      const displayKey = (storageKey === activeUrl) ? 'этой страницы' : `сайта ${activeHostname}`;
+      if (confirm(`Вы уверены, что хотите сбросить все изменения для ${displayKey}?`)) {
         chrome.storage.local.get(['siteTweaks'], (result) => {
           const allTweaks = result.siteTweaks || {};
-          delete allTweaks[activeHostname];
+          delete allTweaks[storageKey];
           chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
             activeDomainData = { css: '', htmlRules: [], enabled: true };
             cssEditor.value = '';
@@ -414,7 +473,7 @@
             renderHTMLRulesList();
             renderSitesList();
             chrome.tabs.sendMessage(activeTab.id, { action: 'RELOAD_STORAGE' }, () => {
-              showStatus('Сайт сброшен до оригинала', 'online');
+              showStatus('Изменения сброшены', 'online');
             });
           });
         });
@@ -539,8 +598,8 @@
   function saveAndSyncRules() {
     chrome.storage.local.get(['siteTweaks'], (result) => {
       const allTweaks = result.siteTweaks || {};
-      allTweaks[activeHostname] = {
-        ...allTweaks[activeHostname],
+      allTweaks[storageKey] = {
+        ...allTweaks[storageKey],
         htmlRules: activeDomainData.htmlRules
       };
       chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
@@ -857,6 +916,243 @@
         statusIndicatorEl.className = 'status-indicator online';
       }, 3500);
     }
+  }
+
+  // JS Console controller setup
+  function setupConsole() {
+    const consoleOutput = document.getElementById('console-output');
+    const consoleInput = document.getElementById('console-input');
+    const btnRunConsole = document.getElementById('btn-run-console');
+    const btnClearConsole = document.getElementById('btn-clear-console');
+    
+    if (!consoleInput || !btnRunConsole || !consoleOutput) return;
+
+    let consoleHistory = [];
+    let historyIndex = -1;
+
+    // Load history from storage
+    chrome.storage.local.get(['consoleHistory'], (res) => {
+      if (res.consoleHistory) {
+        consoleHistory = res.consoleHistory;
+      }
+    });
+
+    const addConsoleLine = (msg, type = 'log', tag = '') => {
+      const line = document.createElement('div');
+      line.className = `console-line ${type}`;
+      
+      const tagSpan = document.createElement('span');
+      tagSpan.className = 'console-tag';
+      tagSpan.textContent = tag || (type === 'log' ? '[Log]' : type === 'warn' ? '[Warn]' : type === 'error' ? '[Error]' : type === 'result' ? '[Result]' : '[System]');
+      
+      const msgSpan = document.createElement('span');
+      msgSpan.className = 'console-msg';
+      msgSpan.textContent = msg;
+      
+      line.appendChild(tagSpan);
+      line.appendChild(msgSpan);
+      consoleOutput.appendChild(line);
+      consoleOutput.scrollTop = consoleOutput.scrollHeight;
+    };
+
+    const runCode = () => {
+      const code = consoleInput.value.trim();
+      if (!code) return;
+
+      // Add to log
+      addConsoleLine(code, 'system', '> ');
+
+      // Add to history
+      if (consoleHistory.length === 0 || consoleHistory[consoleHistory.length - 1] !== code) {
+        consoleHistory.push(code);
+        if (consoleHistory.length > 50) consoleHistory.shift();
+        chrome.storage.local.set({ consoleHistory });
+      }
+      historyIndex = -1;
+      consoleInput.value = '';
+
+      if (!activeTab || !activeTab.id) {
+        addConsoleLine('Нет активной вкладки.', 'error');
+        return;
+      }
+
+      // Send to content script
+      chrome.tabs.sendMessage(activeTab.id, { action: 'EXECUTE_CONSOLE_JS', code }, (res) => {
+        if (chrome.runtime.lastError || !res) {
+          addConsoleLine('Не удалось выполнить код. Убедитесь, что страница загружена и не является системной.', 'error');
+          return;
+        }
+
+        // Show logs captured during run
+        if (res.logs && Array.isArray(res.logs)) {
+          res.logs.forEach(l => {
+            addConsoleLine(l.text, l.type);
+          });
+        }
+
+        if (res.success) {
+          addConsoleLine(res.result !== undefined ? res.result : 'undefined', 'result', '<- ');
+        } else {
+          addConsoleLine(res.error || 'Неизвестная ошибка', 'error', '<- Error: ');
+        }
+      });
+    };
+
+    btnRunConsole.onclick = runCode;
+
+    consoleInput.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
+        e.preventDefault();
+        runCode();
+      } else if (e.key === 'ArrowUp' && consoleInput.selectionStart === 0) {
+        // Command history UP
+        if (consoleHistory.length > 0) {
+          if (historyIndex === -1) {
+            historyIndex = consoleHistory.length - 1;
+          } else {
+            historyIndex = Math.max(0, historyIndex - 1);
+          }
+          consoleInput.value = consoleHistory[historyIndex];
+          e.preventDefault();
+        }
+      } else if (e.key === 'ArrowDown' && consoleInput.selectionStart === consoleInput.value.length) {
+        // Command history DOWN
+        if (historyIndex !== -1) {
+          if (historyIndex === consoleHistory.length - 1) {
+            historyIndex = -1;
+            consoleInput.value = '';
+          } else {
+            historyIndex++;
+            consoleInput.value = consoleHistory[historyIndex];
+          }
+          e.preventDefault();
+        }
+      }
+    };
+
+    btnClearConsole.onclick = () => {
+      consoleOutput.innerHTML = '';
+      addConsoleLine('Логи очищены.', 'system');
+    };
+  }
+
+  // DOM elements search controller setup
+  function setupDOMSearch() {
+    const searchInput = document.getElementById('inspector-search-input');
+    const btnSearch = document.getElementById('btn-search-elements');
+    const resultsList = document.getElementById('search-results-list');
+
+    if (!searchInput || !btnSearch || !resultsList) return;
+
+    const performSearch = () => {
+      const query = searchInput.value.trim();
+      if (!query) {
+        resultsList.style.display = 'none';
+        return;
+      }
+
+      showStatus('Поиск элементов...', 'working');
+      
+      if (!activeTab || !activeTab.id) {
+        showStatus('Ошибка вкладки', 'offline');
+        return;
+      }
+
+      chrome.tabs.sendMessage(activeTab.id, { action: 'SEARCH_ELEMENTS', query }, (res) => {
+        if (chrome.runtime.lastError || !res) {
+          showStatus('Ошибка поиска', 'offline');
+          resultsList.innerHTML = `<div class="empty-state" style="padding: 10px 0;"><p>Ошибка связи со страницей.</p></div>`;
+          resultsList.style.display = 'block';
+          return;
+        }
+
+        resultsList.innerHTML = '';
+        if (!res.elements || res.elements.length === 0) {
+          showStatus('Ничего не найдено', 'online');
+          resultsList.innerHTML = `<div class="empty-state" style="padding: 10px 0;"><p>Совпадений не найдено.</p></div>`;
+          resultsList.style.display = 'block';
+          return;
+        }
+
+        showStatus(`Найдено элементов: ${res.elements.length}`, 'online');
+        resultsList.style.display = 'block';
+
+        res.elements.forEach(el => {
+          const item = document.createElement('div');
+          item.className = 'search-result-item';
+
+          item.innerHTML = `
+            <div class="search-result-info">
+              <span class="search-result-tag" title="${escapeHTML(el.selector)}">${escapeHTML(el.selector)}</span>
+              <span class="search-result-text" title="${escapeHTML(el.textPreview)}">${escapeHTML(el.textPreview || '<пустой элемент>')}</span>
+            </div>
+            <div class="search-result-actions">
+              <button class="btn-icon btn-highlight" title="Подсветить на странице">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="8" x2="12" y2="12"></line>
+                  <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+              </button>
+              <button class="btn-icon btn-edit-specific" title="Изменить в инспекторе" style="color: var(--success); border-color: rgba(16, 185, 129, 0.2);">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 20h9"></path>
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                </svg>
+              </button>
+              <button class="btn-icon btn-icon-danger btn-hide-specific" title="Скрыть элемент">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                </svg>
+              </button>
+            </div>
+          `;
+
+          // Highlight bindings
+          const highlightBtn = item.querySelector('.btn-highlight');
+          highlightBtn.onclick = () => {
+            chrome.tabs.sendMessage(activeTab.id, { action: 'HIGHLIGHT_SPECIFIC_ELEMENT', selector: el.selector });
+          };
+          item.onmouseenter = () => {
+            chrome.tabs.sendMessage(activeTab.id, { action: 'HIGHLIGHT_SPECIFIC_ELEMENT', selector: el.selector, state: true });
+          };
+          item.onmouseleave = () => {
+            chrome.tabs.sendMessage(activeTab.id, { action: 'HIGHLIGHT_SPECIFIC_ELEMENT', selector: el.selector, state: false });
+          };
+
+          // Edit Specific binding
+          item.querySelector('.btn-edit-specific').onclick = () => {
+            chrome.tabs.sendMessage(activeTab.id, { action: 'INSPECT_SPECIFIC_ELEMENT', selector: el.selector }, () => {
+              window.close(); // Close popup so user can interact on screen
+            });
+          };
+
+          // Hide Specific binding
+          item.querySelector('.btn-hide-specific').onclick = () => {
+            chrome.tabs.sendMessage(activeTab.id, { action: 'HIDE_SPECIFIC_ELEMENT', selector: el.selector }, () => {
+              showStatus('Элемент скрыт!', 'online');
+              // Reload rules list locally
+              chrome.storage.local.get(['siteTweaks'], (storageResult) => {
+                const allTweaks = storageResult.siteTweaks || {};
+                const activeData = allTweaks[storageKey] || { css: '', htmlRules: [], enabled: true };
+                activeDomainData.htmlRules = activeData.htmlRules || [];
+                renderHTMLRulesList();
+              });
+            });
+          };
+
+          resultsList.appendChild(item);
+        });
+      });
+    };
+
+    btnSearch.onclick = performSearch;
+    searchInput.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        performSearch();
+      }
+    };
   }
 
   // HTML escaping helper

@@ -89,20 +89,60 @@
     }
   }
 
-  // 2. Load tweaks from storage for current domain
+  let activeScope = 'domain';
+
+  // 2. Load tweaks from storage for current domain & URL
   function loadAndApplyTweaks() {
-    chrome.storage.local.get(['siteTweaks', 'globalEnabled'], (result) => {
+    chrome.storage.local.get(['siteTweaks', 'globalEnabled', 'activeScopes'], (result) => {
       const globalEnabled = result.globalEnabled !== false;
       const allTweaks = result.siteTweaks || {};
+      const activeScopes = result.activeScopes || {};
+      
+      activeScope = activeScopes[hostname] || 'domain';
+      
       const domainData = allTweaks[hostname] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
+      const pageData = allTweaks[window.location.href] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
 
-      currentDomainTweaks = domainData;
+      // currentDomainTweaks represents the settings of the ACTIVE scope (either page or domain)
+      currentDomainTweaks = (activeScope === 'page') ? pageData : domainData;
 
-      if (globalEnabled && domainData.enabled !== false) {
-        applyCustomCSS(domainData.css || '');
-        applyHTMLRules(domainData.htmlRules || []);
-        applyCustomHTML(domainData.html || '');
-        applyCustomJS(domainData.js || '');
+      if (globalEnabled) {
+        let mergedCss = '';
+        let mergedHtmlRules = [];
+        let mergedHtml = '';
+        let mergedJs = '';
+
+        if (domainData.enabled !== false) {
+          mergedCss += (domainData.css || '');
+          mergedHtmlRules = mergedHtmlRules.concat(domainData.htmlRules || []);
+          mergedHtml += (domainData.html || '');
+          mergedJs += (domainData.js || '');
+        }
+
+        if (pageData.enabled !== false) {
+          mergedCss += '\n' + (pageData.css || '');
+          const pageRules = pageData.htmlRules || [];
+          pageRules.forEach(pRule => {
+            const idx = mergedHtmlRules.findIndex(dRule => dRule.selector === pRule.selector && dRule.action === pRule.action);
+            if (idx >= 0) {
+              mergedHtmlRules[idx] = pRule;
+            } else {
+              mergedHtmlRules.push(pRule);
+            }
+          });
+          
+          if (pageData.html) {
+            mergedHtml = pageData.html;
+          }
+          if (pageData.js) {
+            mergedJs += '\n' + pageData.js;
+          }
+        }
+
+        applyCustomCSS(mergedCss);
+        applyHTMLRules(mergedHtmlRules);
+        applyCustomHTML(mergedHtml);
+        applyCustomJS(mergedJs);
       } else {
         applyCustomCSS('');
         applyCustomHTML('');
@@ -267,31 +307,11 @@
   // 6. Listeners for extension messages from popup
   function setupMessageListeners() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.action === 'APPLY_CUSTOM_CSS') {
-        currentDomainTweaks.css = message.css;
-        applyCustomCSS(message.css);
-        updateBadgeCount();
-        sendResponse({ success: true });
-      }
-
-      if (message.action === 'APPLY_CUSTOM_JS') {
-        currentDomainTweaks.js = message.js;
-        applyCustomJS(message.js);
-        updateBadgeCount();
-        sendResponse({ success: true });
-      }
-
-      if (message.action === 'APPLY_CUSTOM_HTML') {
-        currentDomainTweaks.html = message.html;
-        applyCustomHTML(message.html);
-        updateBadgeCount();
-        sendResponse({ success: true });
-      }
-
-      if (message.action === 'APPLY_HTML_RULES') {
-        currentDomainTweaks.htmlRules = message.htmlRules;
-        applyHTMLRules(message.htmlRules);
-        updateBadgeCount();
+      if (message.action === 'APPLY_CUSTOM_CSS' || 
+          message.action === 'APPLY_CUSTOM_JS' || 
+          message.action === 'APPLY_CUSTOM_HTML' || 
+          message.action === 'APPLY_HTML_RULES') {
+        loadAndApplyTweaks();
         sendResponse({ success: true });
       }
 
@@ -317,17 +337,72 @@
         sendResponse({ success: true });
       }
 
+      if (message.action === 'EXECUTE_CONSOLE_JS') {
+        executeConsoleJS(message.code, sendResponse);
+        return true; // Keep message channel open for async response
+      }
+
+      if (message.action === 'SEARCH_ELEMENTS') {
+        sendResponse({ elements: searchElements(message.query) });
+      }
+
+      if (message.action === 'HIGHLIGHT_SPECIFIC_ELEMENT') {
+        highlightSpecificElement(message.selector, message.state);
+        sendResponse({ success: true });
+      }
+
+      if (message.action === 'INSPECT_SPECIFIC_ELEMENT') {
+        try {
+          const el = document.querySelector(message.selector);
+          if (el) {
+            openInspectorModal(el);
+            sendResponse({ success: true });
+          } else {
+            sendResponse({ success: false, error: 'Элемент не найден' });
+          }
+        } catch(e) {
+          sendResponse({ success: false, error: e.message });
+        }
+      }
+
+      if (message.action === 'HIDE_SPECIFIC_ELEMENT') {
+        try {
+          const el = document.querySelector(message.selector);
+          if (el) {
+            el.style.setProperty('display', 'none', 'important');
+            const rule = {
+              id: 'rule_' + Date.now(),
+              selector: message.selector,
+              action: 'hide',
+              value: '',
+              active: true
+            };
+            addOrUpdateHTMLRule(rule);
+            sendResponse({ success: true });
+          } else {
+            sendResponse({ success: false, error: 'Элемент не найден' });
+          }
+        } catch (e) {
+          sendResponse({ success: false, error: e.message });
+        }
+      }
+
       return true;
     });
   }
 
   // Save current domain state back to chrome.storage.local
   function saveCurrentDomainTweaks() {
-    chrome.storage.local.get(['siteTweaks'], (result) => {
+    chrome.storage.local.get(['siteTweaks', 'activeScopes'], (result) => {
       const allTweaks = result.siteTweaks || {};
-      allTweaks[hostname] = currentDomainTweaks;
+      const activeScopes = result.activeScopes || {};
+      const currentScope = activeScopes[hostname] || 'domain';
+      const key = (currentScope === 'page') ? window.location.href : hostname;
+
+      allTweaks[key] = currentDomainTweaks;
       chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
         updateBadgeCount();
+        loadAndApplyTweaks();
       });
     });
   }
@@ -495,6 +570,7 @@
       <div class="stp-tabs">
         <button class="stp-tab-btn active" id="stp-tab-btn-style">Стили (CSS)</button>
         <button class="stp-tab-btn" id="stp-tab-btn-html">HTML / Текст</button>
+        <button class="stp-tab-btn" id="stp-tab-btn-classes">Классы & Атрибуты</button>
       </div>
       <div class="stp-body">
         <div>
@@ -691,6 +767,28 @@
           </div>
         </div>
 
+        <!-- TAB 3: CLASSES & ATTRIBUTES -->
+        <div class="stp-tab-content" id="stp-tab-content-classes">
+          <div>
+            <div class="stp-label">Классы элемента</div>
+            <div class="stp-classes-container" id="stp-classes-container"></div>
+            <div class="stp-file-input-wrapper" style="display: flex; gap: 8px; margin-top: 4px;">
+              <input type="text" id="stp-input-add-class" class="stp-num-input" style="flex: 1; text-align: left;" placeholder="Имя нового класса...">
+              <button class="stp-btn stp-btn-secondary stp-btn-sm" id="stp-btn-add-class" style="width: auto;">Добавить</button>
+            </div>
+          </div>
+          <div class="stp-divider"></div>
+          <div>
+            <div class="stp-label">Кастомные атрибуты</div>
+            <div class="stp-attributes-list" id="stp-attributes-list" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px;"></div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px;">
+              <input type="text" id="stp-input-add-attr-name" class="stp-num-input" style="text-align: left; padding: 6px 10px;" placeholder="Атрибут...">
+              <input type="text" id="stp-input-add-attr-val" class="stp-num-input" style="text-align: left; padding: 6px 10px;" placeholder="Значение...">
+              <button class="stp-btn stp-btn-secondary stp-btn-sm" id="stp-btn-add-attr" style="width: auto;">+</button>
+            </div>
+          </div>
+        </div>
+
         <div class="stp-divider"></div>
 
         <div class="stp-actions">
@@ -716,21 +814,37 @@
     // Tab switching elements
     const tabStyleBtn = document.getElementById('stp-tab-btn-style');
     const tabHtmlBtn = document.getElementById('stp-tab-btn-html');
+    const tabClassesBtn = document.getElementById('stp-tab-btn-classes');
+    
     const tabStyleContent = document.getElementById('stp-tab-content-style');
     const tabHtmlContent = document.getElementById('stp-tab-content-html');
+    const tabClassesContent = document.getElementById('stp-tab-content-classes');
 
     tabStyleBtn.onclick = () => {
       tabStyleBtn.classList.add('active');
       tabHtmlBtn.classList.remove('active');
+      tabClassesBtn.classList.remove('active');
       tabStyleContent.classList.add('active');
       tabHtmlContent.classList.remove('active');
+      tabClassesContent.classList.remove('active');
     };
 
     tabHtmlBtn.onclick = () => {
       tabHtmlBtn.classList.add('active');
       tabStyleBtn.classList.remove('active');
+      tabClassesBtn.classList.remove('active');
       tabHtmlContent.classList.add('active');
       tabStyleContent.classList.remove('active');
+      tabClassesContent.classList.remove('active');
+    };
+
+    tabClassesBtn.onclick = () => {
+      tabClassesBtn.classList.add('active');
+      tabStyleBtn.classList.remove('active');
+      tabHtmlBtn.classList.remove('active');
+      tabClassesContent.classList.add('active');
+      tabStyleContent.classList.remove('active');
+      tabHtmlContent.classList.remove('active');
     };
 
     // Pre-populate visually with computed values
@@ -1303,6 +1417,141 @@
       showToast('Элемент успешно удален.');
       inspectorModal.remove();
     };
+
+    // Classes and attributes dynamic inspector logic
+    const classesContainer = document.getElementById('stp-classes-container');
+    const attributesList = document.getElementById('stp-attributes-list');
+    
+    const updateClassesAndAttributesUI = () => {
+      if (!classesContainer || !attributesList) return;
+
+      // Render classes
+      classesContainer.innerHTML = '';
+      if (el.classList.length === 0) {
+        classesContainer.innerHTML = '<span style="color: #64748b; font-size: 11px; padding: 4px;">Нет классов</span>';
+      } else {
+        Array.from(el.classList).forEach(cls => {
+          if (cls === 'site-tweaker-highlight-box' || cls === 'site-tweaker-selected-box') return;
+          
+          const badge = document.createElement('span');
+          badge.className = 'stp-class-badge';
+          badge.innerHTML = `
+            <span>.${cls}</span>
+            <span class="stp-class-badge-remove" data-class="${cls}">&times;</span>
+          `;
+          
+          badge.querySelector('.stp-class-badge-remove').onclick = (e) => {
+            const classToRemove = e.target.getAttribute('data-class');
+            el.classList.remove(classToRemove);
+            
+            const rule = {
+              id: 'rule_' + Date.now(),
+              selector,
+              action: 'edit_attribute',
+              attribute: 'class',
+              value: el.className,
+              active: true
+            };
+            addOrUpdateHTMLRule(rule);
+            updateClassesAndAttributesUI();
+            showToast(`Класс .${classToRemove} удален.`);
+          };
+          
+          classesContainer.appendChild(badge);
+        });
+      }
+
+      // Render custom attributes
+      attributesList.innerHTML = '';
+      const skipAttrs = ['id', 'class', 'style', 'data-stp-original-html', 'data-stp-modified-html', 'data-stp-original-class', 'data-stp-original-src', 'data-stp-original-class'];
+      let attrCount = 0;
+      
+      Array.from(el.attributes).forEach(attr => {
+        if (skipAttrs.includes(attr.name) || attr.name.startsWith('data-stp-original-')) return;
+        
+        attrCount++;
+        const row = document.createElement('div');
+        row.className = 'stp-attribute-row';
+        row.innerHTML = `
+          <div class="stp-attr-info">
+            <span class="stp-attr-name">${escapeHTML(attr.name)}:</span>
+            <span class="stp-attr-value" title="${escapeHTML(attr.value)}">${escapeHTML(attr.value)}</span>
+          </div>
+          <button class="stp-class-badge-remove" data-attr="${escapeHTML(attr.name)}">&times;</button>
+        `;
+        
+        row.querySelector('.stp-class-badge-remove').onclick = (e) => {
+          const attrToRemove = e.target.getAttribute('data-attr');
+          el.removeAttribute(attrToRemove);
+          
+          if (currentDomainTweaks.htmlRules) {
+            currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
+              r => !(r.selector === selector && r.action === 'edit_attribute' && r.attribute === attrToRemove)
+            );
+            saveCurrentDomainTweaks();
+          }
+          
+          updateClassesAndAttributesUI();
+          showToast(`Атрибут ${attrToRemove} удален.`);
+        };
+        
+        attributesList.appendChild(row);
+      });
+
+      if (attrCount === 0) {
+        attributesList.innerHTML = '<div style="color: #64748b; font-size: 11px; text-align: center; width: 100%;">Нет кастомных атрибутов</div>';
+      }
+    };
+
+    // Add Class binding
+    document.getElementById('stp-btn-add-class').onclick = () => {
+      const input = document.getElementById('stp-input-add-class');
+      const val = input.value.trim();
+      if (!val) return;
+      
+      el.classList.add(val);
+      const rule = {
+        id: 'rule_' + Date.now(),
+        selector,
+        action: 'edit_attribute',
+        attribute: 'class',
+        value: el.className,
+        active: true
+      };
+      addOrUpdateHTMLRule(rule);
+      input.value = '';
+      updateClassesAndAttributesUI();
+      showToast(`Класс .${val} добавлен!`);
+    };
+
+    // Add Attribute binding
+    document.getElementById('stp-btn-add-attr').onclick = () => {
+      const inputName = document.getElementById('stp-input-add-attr-name');
+      const inputVal = document.getElementById('stp-input-add-attr-val');
+      const name = inputName.value.trim();
+      const val = inputVal.value.trim();
+      
+      if (!name) return;
+      
+      el.setAttribute(name, val);
+      const rule = {
+        id: 'rule_' + Date.now(),
+        selector,
+        action: 'edit_attribute',
+        attribute: name,
+        value: val,
+        active: true
+      };
+      addOrUpdateHTMLRule(rule);
+      
+      inputName.value = '';
+      inputVal.value = '';
+      updateClassesAndAttributesUI();
+      showToast(`Атрибут ${name} изменен!`);
+    };
+
+    // Run initial classes update
+    updateClassesAndAttributesUI();
   }
 
   function addOrUpdateHTMLRule(newRule) {
@@ -1364,6 +1613,187 @@
     setTimeout(() => {
       if (toast) toast.remove();
     }, 3000);
+  }
+
+  // Execute custom JavaScript code in the main world context
+  function executeConsoleJS(code, sendResponse) {
+    const eventId = 'dg_console_result_' + Math.random().toString(36).substr(2, 9);
+    
+    const handler = (e) => {
+      window.removeEventListener(eventId, handler);
+      sendResponse(e.detail);
+    };
+    
+    window.addEventListener(eventId, handler);
+
+    // Inject main world script
+    const script = document.createElement('script');
+    script.id = 'dg-console-runner';
+    script.textContent = `
+      (function() {
+        const logs = [];
+        const wrapLog = (type) => {
+          const original = console[type];
+          console[type] = (...args) => {
+            logs.push({
+              type: type,
+              text: args.map(arg => {
+                if (arg === null) return 'null';
+                if (arg === undefined) return 'undefined';
+                if (typeof arg === 'object') {
+                  try { return JSON.stringify(arg); } catch(e) { return String(arg); }
+                }
+                return String(arg);
+              }).join(' ')
+            });
+            original.apply(console, args);
+          };
+          return original;
+        };
+
+        const origLog = wrapLog('log');
+        const origWarn = wrapLog('warn');
+        const origError = wrapLog('error');
+
+        let result;
+        let success = true;
+        let errorMsg = '';
+
+        try {
+          result = eval(${JSON.stringify(code)});
+        } catch (e) {
+          success = false;
+          errorMsg = e.message;
+        }
+
+        // Restore original console methods
+        console.log = origLog;
+        console.warn = origWarn;
+        console.error = origError;
+
+        let resultStr = 'undefined';
+        if (result !== undefined) {
+          try {
+            resultStr = typeof result === 'object' ? JSON.stringify(result) : String(result);
+          } catch(e) {
+            resultStr = String(result);
+          }
+        }
+
+        window.dispatchEvent(new CustomEvent('${eventId}', {
+          detail: {
+            success,
+            result: resultStr,
+            error: errorMsg,
+            logs
+          }
+        }));
+      })();
+    `;
+
+    (document.head || document.documentElement).appendChild(script);
+    script.remove();
+  }
+
+  // Search DOM elements by selector or text content
+  function searchElements(query) {
+    let elements = [];
+    
+    // 1. Try as CSS Selector
+    try {
+      const matches = document.querySelectorAll(query);
+      matches.forEach(el => {
+        if (el.closest('#site-tweaker-inspector-modal') || el.classList.contains('site-tweaker-highlight-box')) {
+          return;
+        }
+        elements.push(el);
+      });
+    } catch (e) {}
+
+    // 2. Search by text content
+    const textQuery = query.toLowerCase();
+    if (textQuery.length >= 2) {
+      const allElems = document.querySelectorAll('body *:not(script):not(style):not(#site-tweaker-inspector-modal):not(.site-tweaker-highlight-box)');
+      allElems.forEach(el => {
+        if (elements.includes(el)) return;
+        
+        let directText = '';
+        for (let child of el.childNodes) {
+          if (child.nodeType === Node.TEXT_NODE) {
+            directText += child.textContent;
+          }
+        }
+        if (directText.toLowerCase().includes(textQuery)) {
+          elements.push(el);
+        }
+      });
+    }
+
+    // Map to metadata objects (cap at 30 items)
+    const limited = elements.slice(0, 30);
+    return limited.map(el => {
+      const selector = getUniqueCSSSelector(el);
+      const textPreview = el.textContent ? el.textContent.trim().substring(0, 50) : '';
+      return {
+        tagName: el.tagName.toLowerCase(),
+        selector: selector,
+        textPreview: textPreview
+      };
+    });
+  }
+
+  // Highlight specific selector visual feedback
+  let searchHighlightBox = null;
+  function highlightSpecificElement(selector, state) {
+    if (state === false) {
+      if (searchHighlightBox) {
+        searchHighlightBox.remove();
+        searchHighlightBox = null;
+      }
+      return;
+    }
+
+    try {
+      const el = document.querySelector(selector);
+      if (!el) return;
+
+      if (!searchHighlightBox) {
+        searchHighlightBox = document.createElement('div');
+        searchHighlightBox.className = 'site-tweaker-highlight-box';
+        searchHighlightBox.style.borderColor = '#10b981';
+        searchHighlightBox.style.backgroundColor = 'rgba(16, 185, 129, 0.2)';
+        searchHighlightBox.style.boxShadow = '0 0 10px rgba(16, 185, 129, 0.4)';
+        document.body.appendChild(searchHighlightBox);
+      }
+
+      const rect = el.getBoundingClientRect();
+      const scrollX = window.scrollX || window.pageXOffset;
+      const scrollY = window.scrollY || window.pageYOffset;
+
+      searchHighlightBox.style.top = `${rect.top + scrollY}px`;
+      searchHighlightBox.style.left = `${rect.left + scrollX}px`;
+      searchHighlightBox.style.width = `${rect.width}px`;
+      searchHighlightBox.style.height = `${rect.height}px`;
+      searchHighlightBox.style.display = 'block';
+
+      // Click trigger (no hover state passed) flashes and auto fades
+      if (state === undefined) {
+        searchHighlightBox.style.transition = 'all 0.5s ease-out';
+        setTimeout(() => {
+          if (searchHighlightBox) {
+            searchHighlightBox.style.opacity = '0';
+            setTimeout(() => {
+              if (searchHighlightBox) {
+                searchHighlightBox.remove();
+                searchHighlightBox = null;
+              }
+            }, 500);
+          }
+        }, 1500);
+      }
+    } catch (e) {
+      console.warn('DesignGhost: Highlight error:', selector, e);
+    }
   }
 
   function escapeHTML(str) {
