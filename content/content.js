@@ -682,13 +682,90 @@
     return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
   }
 
+  function getSelectorOptions(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return [];
+
+    const getClasses = (element) => {
+      let classes = [];
+      if (element.classList && element.classList.length > 0) {
+        Array.from(element.classList).forEach(cls => {
+          if (cls && !cls.startsWith('site-tweaker-') && !cls.startsWith('stp-') && cls !== 'active') {
+            classes.push(cls);
+          }
+        });
+      }
+      return classes;
+    };
+
+    const options = [];
+
+    if (el.id) {
+      options.push(`#${CSS.escape(el.id)}`);
+    }
+
+    const tagName = el.nodeName.toLowerCase();
+    const classes = getClasses(el);
+    
+    if (classes.length > 0) {
+      options.push(`${tagName}.${CSS.escape(classes[0])}`);
+      options.push(`.${CSS.escape(classes[0])}`);
+    }
+
+    const getPath = (useClasses) => {
+      let curr = el;
+      let path = [];
+      while (curr && curr.nodeType === Node.ELEMENT_NODE) {
+        let name = curr.nodeName.toLowerCase();
+        let selector = name;
+        if (curr.id) {
+          selector += `#${CSS.escape(curr.id)}`;
+          if (useClasses) {
+            const clsList = getClasses(curr).map(c => `.${CSS.escape(c)}`).join('');
+            selector += clsList;
+          }
+          path.unshift(selector);
+          break;
+        } else {
+          if (useClasses) {
+            const clsList = getClasses(curr).map(c => `.${CSS.escape(c)}`).join('');
+            selector += clsList;
+          }
+          let sibling = curr;
+          let nth = 1;
+          while (sibling = sibling.previousElementSibling) {
+            if (sibling.nodeName.toLowerCase() === name) nth++;
+          }
+          if (nth !== 1) selector += `:nth-of-type(${nth})`;
+        }
+        path.unshift(selector);
+        curr = curr.parentElement;
+        if (curr && curr.tagName === 'BODY') {
+          path.unshift('body');
+          break;
+        }
+      }
+      return path.join(' > ');
+    };
+
+    options.push(getPath(false));
+    options.push(getPath(true));
+
+    return Array.from(new Set(options.filter(Boolean)));
+  }
+
   // Open Inspector Dialog Modal
   function openInspectorModal(el) {
     if (inspectorModal) {
       inspectorModal.remove();
     }
 
-    const selector = getUniqueCSSSelector(el);
+    const selectorOptions = getSelectorOptions(el);
+    const defaultSelector = getUniqueCSSSelector(el);
+    if (!selectorOptions.includes(defaultSelector)) {
+      selectorOptions.push(defaultSelector);
+    }
+    const selector = selectorOptions[0] || defaultSelector;
+
     const currentHTML = el.innerHTML;
     const isImgTag = el.tagName === 'IMG';
 
@@ -706,10 +783,11 @@
     }
 
     let matchingSelectorsHTML = '';
-    uniqueMatchingSelectors.forEach(sel => {
-      if (sel !== selector) {
-        matchingSelectorsHTML += `<option value="${escapeHTML(sel)}">${escapeHTML(sel)} (Уже добавлено)</option>`;
-      }
+    selectorOptions.forEach(sel => {
+      if (sel === selector) return;
+      const isExisting = uniqueMatchingSelectors.has(sel);
+      const labelSuffix = isExisting ? ' (Уже добавлено)' : '';
+      matchingSelectorsHTML += `<option value="${escapeHTML(sel)}">${escapeHTML(sel)}${labelSuffix}</option>`;
     });
 
     inspectorModal = document.createElement('div');
@@ -733,7 +811,7 @@
         <div>
           <div class="stp-label">CSS Селектор</div>
           <select id="stp-selector-choice" class="stp-select" style="font-family: monospace; font-size: 11px; text-align: left; text-align-last: left; width: 100% !important; background-color: #1e293b !important; border: 1px solid rgba(255,255,255,0.15) !important;">
-            <option value="${escapeHTML(selector)}">${escapeHTML(selector)} (Новый селектор)</option>
+            <option value="${escapeHTML(selector)}">${escapeHTML(selector)}${uniqueMatchingSelectors.has(selector) ? ' (Уже добавлено)' : ' (По умолчанию)'}</option>
             ${matchingSelectorsHTML}
           </select>
         </div>
@@ -1410,12 +1488,7 @@
         const imgOptionsContainer = document.getElementById('stp-img-options');
         if (imgOptionsContainer) imgOptionsContainer.style.display = 'none';
 
-        if (currentDomainTweaks.htmlRules) {
-          currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
-            r => !(r.selector === activeSelector && r.action === 'edit_attribute' && r.attribute === 'src')
-          );
-          saveCurrentDomainTweaks();
-        }
+        removeHTMLRule(activeSelector, 'edit_attribute', 'src');
 
         btnRevertImgSrc.style.display = 'none';
         uploadImgSrc.value = '';
@@ -1522,12 +1595,7 @@
       el.style.removeProperty('object-fit');
       el.style.removeProperty('object-position');
 
-      if (currentDomainTweaks.htmlRules) {
-        currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
-          r => !(r.selector === activeSelector && r.action === 'edit_style')
-        );
-        saveCurrentDomainTweaks();
-      }
+      removeHTMLRule(activeSelector, 'edit_style');
 
       // Re-populate computed styles
       const currentComputed = window.getComputedStyle(el);
@@ -1589,12 +1657,7 @@
 
       document.getElementById('stp-html-input').value = el.innerHTML;
 
-      if (currentDomainTweaks.htmlRules) {
-        currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
-          r => !(r.selector === activeSelector && r.action === 'edit_html')
-        );
-        saveCurrentDomainTweaks();
-      }
+      removeHTMLRule(activeSelector, 'edit_html');
 
       showToast('HTML код элемента сброшен до исходного.');
     };
@@ -1699,12 +1762,7 @@
           const attrToRemove = e.target.getAttribute('data-attr');
           el.removeAttribute(attrToRemove);
           
-          if (currentDomainTweaks.htmlRules) {
-            currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
-              r => !(r.selector === activeSelector && r.action === 'edit_attribute' && r.attribute === attrToRemove)
-            );
-            saveCurrentDomainTweaks();
-          }
+          removeHTMLRule(activeSelector, 'edit_attribute', attrToRemove);
           
           updateClassesAndAttributesUI();
           showToast(`Атрибут ${attrToRemove} удален.`);
@@ -1788,20 +1846,62 @@
     updateClassesAndAttributesUI();
   }
 
+  function getSelectedInspectorScope() {
+    const inspectorScope = document.getElementById('stp-inspector-scope');
+    return inspectorScope ? inspectorScope.value : activeScope;
+  }
+
   function addOrUpdateHTMLRule(newRule) {
-    if (!currentDomainTweaks.htmlRules) {
-      currentDomainTweaks.htmlRules = [];
-    }
+    const targetScope = getSelectedInspectorScope();
+    const key = (targetScope === 'page') ? normalizeUrl(window.location.href) : hostname;
 
-    // Replace existing rule with same selector or push new
-    const existingIndex = currentDomainTweaks.htmlRules.findIndex(r => r.selector === newRule.selector && r.action === newRule.action);
-    if (existingIndex >= 0) {
-      currentDomainTweaks.htmlRules[existingIndex] = newRule;
-    } else {
-      currentDomainTweaks.htmlRules.push(newRule);
-    }
+    chrome.storage.local.get(['siteTweaks'], (result) => {
+      const allTweaks = result.siteTweaks || {};
+      const targetData = allTweaks[key] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
 
-    saveCurrentDomainTweaks();
+      if (!targetData.htmlRules) {
+        targetData.htmlRules = [];
+      }
+
+      const existingIndex = targetData.htmlRules.findIndex(r => r.selector === newRule.selector && r.action === newRule.action && (newRule.action !== 'edit_attribute' || r.attribute === newRule.attribute));
+      if (existingIndex >= 0) {
+        targetData.htmlRules[existingIndex] = newRule;
+      } else {
+        targetData.htmlRules.push(newRule);
+      }
+
+      allTweaks[key] = targetData;
+      chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
+        cachedSiteTweaks = allTweaks;
+        updateBadgeCount();
+        loadAndApplyTweaks();
+      });
+    });
+  }
+
+  function removeHTMLRule(selector, action, extraAttr) {
+    const targetScope = getSelectedInspectorScope();
+    const key = (targetScope === 'page') ? normalizeUrl(window.location.href) : hostname;
+
+    chrome.storage.local.get(['siteTweaks'], (result) => {
+      const allTweaks = result.siteTweaks || {};
+      const targetData = allTweaks[key] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
+
+      if (targetData.htmlRules) {
+        targetData.htmlRules = targetData.htmlRules.filter(r => {
+          if (r.selector !== selector || r.action !== action) return true;
+          if (action === 'edit_attribute' && extraAttr && r.attribute !== extraAttr) return true;
+          return false;
+        });
+      }
+
+      allTweaks[key] = targetData;
+      chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
+        cachedSiteTweaks = allTweaks;
+        updateBadgeCount();
+        loadAndApplyTweaks();
+      });
+    });
   }
 
   function makeModalDraggable(modal) {
