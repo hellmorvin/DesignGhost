@@ -208,7 +208,13 @@
         chrome.storage.local.get(['siteTweaks', 'activeScopes'], (res) => {
           const activeScopes = res.activeScopes || {};
           activeScopes[activeHostname] = newScope;
-          chrome.storage.local.set({ activeScopes });
+          chrome.storage.local.set({ activeScopes }, () => {
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+              if (tabs[0] && tabs[0].id) {
+                chrome.tabs.sendMessage(tabs[0].id, { action: 'RELOAD_STORAGE' }).catch(() => {});
+              }
+            });
+          });
           
           const tweaks = res.siteTweaks || {};
           const activeData = tweaks[storageKey] || { css: '', htmlRules: [], enabled: true };
@@ -976,14 +982,73 @@
         return;
       }
 
-      // Send to content script
-      chrome.tabs.sendMessage(activeTab.id, { action: 'EXECUTE_CONSOLE_JS', code }, (res) => {
-        if (chrome.runtime.lastError || !res) {
-          addConsoleLine('Не удалось выполнить код. Убедитесь, что страница загружена и не является системной.', 'error');
+      chrome.scripting.executeScript({
+        target: { tabId: activeTab.id },
+        world: 'MAIN',
+        func: (codeString) => {
+          const logs = [];
+          const wrapLog = (type) => {
+            const original = console[type];
+            console[type] = (...args) => {
+              logs.push({
+                type: type,
+                text: args.map(arg => {
+                  if (arg === null) return 'null';
+                  if (arg === undefined) return 'undefined';
+                  if (typeof arg === 'object') {
+                    try { return JSON.stringify(arg); } catch(e) { return String(arg); }
+                  }
+                  return String(arg);
+                }).join(' ')
+              });
+              original.apply(console, args);
+            };
+            return original;
+          };
+
+          const origLog = wrapLog('log');
+          const origWarn = wrapLog('warn');
+          const origError = wrapLog('error');
+
+          let result;
+          let success = true;
+          let errorMsg = '';
+
+          try {
+            result = eval(codeString);
+          } catch (e) {
+            success = false;
+            errorMsg = e.message;
+          }
+
+          console.log = origLog;
+          console.warn = origWarn;
+          console.error = origError;
+
+          let resultStr = 'undefined';
+          if (result !== undefined) {
+            try {
+              resultStr = typeof result === 'object' ? JSON.stringify(result) : String(result);
+            } catch(e) {
+              resultStr = String(result);
+            }
+          }
+
+          return {
+            success,
+            result: resultStr,
+            error: errorMsg,
+            logs
+          };
+        },
+        args: [code]
+      }).then((results) => {
+        if (!results || !results[0]) {
+          addConsoleLine('Не удалось получить результат выполнения.', 'error');
           return;
         }
 
-        // Show logs captured during run
+        const res = results[0].result;
         if (res.logs && Array.isArray(res.logs)) {
           res.logs.forEach(l => {
             addConsoleLine(l.text, l.type);
@@ -995,6 +1060,8 @@
         } else {
           addConsoleLine(res.error || 'Неизвестная ошибка', 'error', '<- Error: ');
         }
+      }).catch((err) => {
+        addConsoleLine('Ошибка выполнения: ' + err.message, 'error');
       });
     };
 
