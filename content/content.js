@@ -692,6 +692,26 @@
     const currentHTML = el.innerHTML;
     const isImgTag = el.tagName === 'IMG';
 
+    const matchingRules = [];
+    const uniqueMatchingSelectors = new Set();
+    if (currentDomainTweaks && currentDomainTweaks.htmlRules) {
+      currentDomainTweaks.htmlRules.forEach(rule => {
+        try {
+          if (el.matches(rule.selector)) {
+            matchingRules.push(rule);
+            uniqueMatchingSelectors.add(rule.selector);
+          }
+        } catch (e) {}
+      });
+    }
+
+    let matchingSelectorsHTML = '';
+    uniqueMatchingSelectors.forEach(sel => {
+      if (sel !== selector) {
+        matchingSelectorsHTML += `<option value="${escapeHTML(sel)}">${escapeHTML(sel)} (Уже добавлено)</option>`;
+      }
+    });
+
     inspectorModal = document.createElement('div');
     inspectorModal.id = 'site-tweaker-inspector-modal';
     inspectorModal.innerHTML = `
@@ -712,13 +732,16 @@
       <div class="stp-body">
         <div>
           <div class="stp-label">CSS Селектор</div>
-          <div class="stp-selector-badge">${escapeHTML(selector)}</div>
+          <select id="stp-selector-choice" class="stp-select" style="font-family: monospace; font-size: 11px; text-align: left; text-align-last: left; width: 100% !important; background-color: #1e293b !important; border: 1px solid rgba(255,255,255,0.15) !important;">
+            <option value="${escapeHTML(selector)}">${escapeHTML(selector)} (Новый селектор)</option>
+            ${matchingSelectorsHTML}
+          </select>
         </div>
         <div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.05); padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">
-          <span class="stp-label" style="margin: 0; font-size: 11px;">Область сохранения:</span>
+          <span class="stp-label" style="margin: 0; font-size: 11px;">Область применения:</span>
           <select id="stp-inspector-scope" class="stp-select" style="width: auto; margin: 0; padding: 2px 24px 2px 8px; font-size: 11px; background-color: rgba(30, 41, 59, 0.9); height: 24px; color: #fff;">
-            <option value="domain">Весь домен</option>
-            <option value="page">Только страница</option>
+            <option value="page">Только на эту страницу</option>
+            <option value="domain">На все страницы сайта</option>
           </select>
         </div>
 
@@ -1037,6 +1060,54 @@
     // Pre-populate custom HTML
     document.getElementById('stp-html-input').value = el.innerHTML;
 
+    let activeSelector = selector;
+    const selectorChoice = document.getElementById('stp-selector-choice');
+
+    const loadRuleValues = (selectedSel) => {
+      activeSelector = selectedSel;
+      const existingStyleRule = matchingRules.find(r => r.selector === selectedSel && r.action === 'edit_style');
+      if (existingStyleRule && typeof existingStyleRule.value === 'object') {
+        const val = existingStyleRule.value;
+        colorText.value = val.color || textColHex;
+        colorTextHex.value = val.color || textColHex;
+        colorBg.value = val['background-color'] || bgColHex;
+        colorBgHex.value = val['background-color'] || bgColHex;
+        fontSize.value = parseFloat(val['font-size']) || currentFSize;
+        fontSizeVal.textContent = (val['font-size'] || currentFSize + 'px');
+        borderRadius.value = parseFloat(val['border-radius']) || currentBRad;
+        borderRadiusVal.textContent = (val['border-radius'] || currentBRad + 'px');
+        opacity.value = val.opacity !== undefined ? Math.round(parseFloat(val.opacity) * 100) : currentOp;
+        opacityVal.textContent = (val.opacity !== undefined ? Math.round(parseFloat(val.opacity) * 100) : currentOp) + '%';
+        paddingInput.value = val.padding ? parseInt(val.padding) : '';
+        marginInput.value = val.margin ? parseInt(val.margin) : '';
+      } else {
+        // Reset to computed styles
+        colorText.value = textColHex;
+        colorTextHex.value = textColHex;
+        colorBg.value = bgColHex;
+        colorBgHex.value = bgColHex;
+        fontSize.value = currentFSize;
+        fontSizeVal.textContent = currentFSize + 'px';
+        borderRadius.value = currentBRad;
+        borderRadiusVal.textContent = currentBRad + 'px';
+        opacity.value = currentOp;
+        opacityVal.textContent = currentOp + '%';
+        paddingInput.value = parseInt(computed.paddingTop) || '';
+        marginInput.value = parseInt(computed.marginTop) || '';
+      }
+    };
+
+    if (selectorChoice) {
+      selectorChoice.onchange = (e) => {
+        loadRuleValues(e.target.value);
+      };
+      if (uniqueMatchingSelectors.size > 0) {
+        const firstExisting = Array.from(uniqueMatchingSelectors)[0];
+        selectorChoice.value = firstExisting;
+        loadRuleValues(firstExisting);
+      }
+    }
+
     // Background options container and elements
     const bgOptionsContainer = document.getElementById('stp-bg-options');
     const selectBgSize = document.getElementById('stp-bg-size');
@@ -1313,7 +1384,7 @@
 
           const rule = {
             id: 'rule_' + Date.now(),
-            selector,
+            selector: activeSelector,
             action: 'edit_attribute',
             attribute: 'src',
             value: dataUrl,
@@ -1341,7 +1412,7 @@
 
         if (currentDomainTweaks.htmlRules) {
           currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
-            r => !(r.selector === selector && r.action === 'edit_attribute' && r.attribute === 'src')
+            r => !(r.selector === activeSelector && r.action === 'edit_attribute' && r.attribute === 'src')
           );
           saveCurrentDomainTweaks();
         }
@@ -1425,7 +1496,7 @@
 
       const rule = {
         id: 'rule_' + Date.now(),
-        selector,
+        selector: activeSelector,
         action: 'edit_style',
         value: stylesObj,
         active: true
@@ -1453,7 +1524,7 @@
 
       if (currentDomainTweaks.htmlRules) {
         currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
-          r => !(r.selector === selector && r.action === 'edit_style')
+          r => !(r.selector === activeSelector && r.action === 'edit_style')
         );
         saveCurrentDomainTweaks();
       }
@@ -1498,7 +1569,7 @@
 
       const rule = {
         id: 'rule_' + Date.now(),
-        selector,
+        selector: activeSelector,
         action: 'edit_html',
         value: newHTML,
         active: true
@@ -1520,7 +1591,7 @@
 
       if (currentDomainTweaks.htmlRules) {
         currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
-          r => !(r.selector === selector && r.action === 'edit_html')
+          r => !(r.selector === activeSelector && r.action === 'edit_html')
         );
         saveCurrentDomainTweaks();
       }
@@ -1534,7 +1605,7 @@
 
       const rule = {
         id: 'rule_' + Date.now(),
-        selector,
+        selector: activeSelector,
         action: 'hide',
         value: '',
         active: true
@@ -1551,7 +1622,7 @@
 
       const rule = {
         id: 'rule_' + Date.now(),
-        selector,
+        selector: activeSelector,
         action: 'remove',
         value: '',
         active: true
@@ -1590,7 +1661,7 @@
             
             const rule = {
               id: 'rule_' + Date.now(),
-              selector,
+              selector: activeSelector,
               action: 'edit_attribute',
               attribute: 'class',
               value: el.className,
@@ -1630,7 +1701,7 @@
           
           if (currentDomainTweaks.htmlRules) {
             currentDomainTweaks.htmlRules = currentDomainTweaks.htmlRules.filter(
-              r => !(r.selector === selector && r.action === 'edit_attribute' && r.attribute === attrToRemove)
+              r => !(r.selector === activeSelector && r.action === 'edit_attribute' && r.attribute === attrToRemove)
             );
             saveCurrentDomainTweaks();
           }
@@ -1656,7 +1727,7 @@
       el.classList.add(val);
       const rule = {
         id: 'rule_' + Date.now(),
-        selector,
+        selector: activeSelector,
         action: 'edit_attribute',
         attribute: 'class',
         value: el.className,
@@ -1680,7 +1751,7 @@
       el.setAttribute(name, val);
       const rule = {
         id: 'rule_' + Date.now(),
-        selector,
+        selector: activeSelector,
         action: 'edit_attribute',
         attribute: name,
         value: val,
@@ -1707,7 +1778,7 @@
           scopes[hostname] = newScope;
           chrome.storage.local.set({ activeScopes: scopes }, () => {
             loadAndApplyTweaks();
-            showToast(newScope === 'page' ? 'Область: Только страница' : 'Область: Весь домен');
+            showToast(newScope === 'page' ? 'Область: Только на эту страницу' : 'Область: На все страницы сайта');
           });
         });
       };
