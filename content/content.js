@@ -585,22 +585,36 @@
   function getUniqueCSSSelector(el) {
     if (!el || el.nodeType !== Node.ELEMENT_NODE) return '';
 
+    const getClasses = (element) => {
+      let classStr = '';
+      if (element.classList && element.classList.length > 0) {
+        Array.from(element.classList).forEach(cls => {
+          if (cls && !cls.startsWith('site-tweaker-') && !cls.startsWith('stp-') && cls !== 'active') {
+            classStr += `.${CSS.escape(cls)}`;
+          }
+        });
+      }
+      return classStr;
+    };
+
     if (el.id) {
-      return `#${CSS.escape(el.id)}`;
+      return `#${CSS.escape(el.id)}${getClasses(el)}`;
     }
 
     let path = [];
     while (el && el.nodeType === Node.ELEMENT_NODE) {
-      let selector = el.nodeName.toLowerCase();
+      let tagName = el.nodeName.toLowerCase();
+      let selector = tagName;
       if (el.id) {
-        selector += `#${CSS.escape(el.id)}`;
+        selector += `#${CSS.escape(el.id)}${getClasses(el)}`;
         path.unshift(selector);
         break;
       } else {
+        selector += getClasses(el);
         let sibling = el;
         let nth = 1;
         while (sibling = sibling.previousElementSibling) {
-          if (sibling.nodeName.toLowerCase() === selector) nth++;
+          if (sibling.nodeName.toLowerCase() === tagName) nth++;
         }
         if (nth !== 1) selector += `:nth-of-type(${nth})`;
       }
