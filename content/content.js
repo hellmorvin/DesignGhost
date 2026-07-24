@@ -71,6 +71,15 @@
     loadAndApplyTweaks();
     setupMessageListeners();
     setupMutationObserver();
+
+    // Watch for URL updates in SPAs to reload and apply correct page-specific overrides
+    let lastUrl = window.location.href;
+    setInterval(() => {
+      if (window.location.href !== lastUrl) {
+        lastUrl = window.location.href;
+        loadAndApplyTweaks();
+      }
+    }, 500);
   }
 
   // 1. Create or get Custom Style Tag in DOM
@@ -91,8 +100,61 @@
 
   let activeScope = 'domain';
 
+  // Revert all previously applied HTML and style rules to restore DOM state
+  function revertAllAppliedRules() {
+    // 1. Restore HTML
+    document.querySelectorAll('[data-stp-original-html]').forEach(el => {
+      el.innerHTML = el.getAttribute('data-stp-original-html');
+      el.removeAttribute('data-stp-original-html');
+      el.removeAttribute('data-stp-modified-html');
+    });
+
+    // 2. Restore Text
+    document.querySelectorAll('[data-stp-modified-text]').forEach(el => {
+      if (el.hasAttribute('data-stp-original-text')) {
+        el.textContent = el.getAttribute('data-stp-original-text');
+        el.removeAttribute('data-stp-original-text');
+      }
+      el.removeAttribute('data-stp-modified-text');
+    });
+
+    // 3. Restore style and attributes
+    document.querySelectorAll('*').forEach(el => {
+      // Restore attributes from data-stp-original-*
+      Array.from(el.attributes).forEach(attr => {
+        if (attr.name.startsWith('data-stp-original-')) {
+          const originalAttr = attr.name.replace('data-stp-original-', '');
+          const originalValue = attr.value;
+          if (originalValue === '') {
+            el.removeAttribute(originalAttr);
+          } else {
+            el.setAttribute(originalAttr, originalValue);
+          }
+          el.removeAttribute(attr.name);
+        }
+      });
+
+      // Restore style
+      if (el.hasAttribute('data-stp-original-style')) {
+        const origStyle = el.getAttribute('data-stp-original-style');
+        if (origStyle) {
+          el.setAttribute('style', origStyle);
+        } else {
+          el.removeAttribute('style');
+        }
+        el.removeAttribute('data-stp-original-style');
+      }
+
+      // Restore visibility
+      if (el.style.display === 'none') {
+        el.style.removeProperty('display');
+      }
+    });
+  }
+
   // 2. Load tweaks from storage for current domain & URL
   function loadAndApplyTweaks() {
+    revertAllAppliedRules();
     chrome.storage.local.get(['siteTweaks', 'globalEnabled', 'activeScopes'], (result) => {
       const globalEnabled = result.globalEnabled !== false;
       const allTweaks = result.siteTweaks || {};
@@ -249,10 +311,16 @@
             }
           } else if (rule.action === 'edit_text' && rule.value !== undefined) {
             if (el.getAttribute('data-stp-modified-text') !== rule.id) {
+              if (!el.hasAttribute('data-stp-original-text')) {
+                el.setAttribute('data-stp-original-text', el.textContent || '');
+              }
               el.textContent = rule.value;
               el.setAttribute('data-stp-modified-text', rule.id);
             }
           } else if (rule.action === 'edit_style' && typeof rule.value === 'object') {
+            if (!el.hasAttribute('data-stp-original-style')) {
+              el.setAttribute('data-stp-original-style', el.getAttribute('style') || '');
+            }
             for (const [prop, val] of Object.entries(rule.value)) {
               if (val !== undefined && val !== '') {
                 el.style.setProperty(prop, val, 'important');
