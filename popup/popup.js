@@ -191,7 +191,8 @@
 
     // Update Header Domain name & switch
     const domainLabel = document.getElementById('current-domain');
-    domainLabel.textContent = activeHostname;
+    const scopeLabel = (storageKey === activeUrl) ? 'Только страница' : 'Весь домен';
+    domainLabel.textContent = `${activeHostname} (${scopeLabel})`;
     domainLabel.style.color = '';
 
     const domainToggle = document.getElementById('domain-enable-toggle');
@@ -216,54 +217,7 @@
       });
     };
 
-    // Scope Selection Binding
-    const scopeSelect = document.getElementById('scope-select');
-    if (scopeSelect) {
-      scopeSelect.value = (storageKey === activeUrl) ? 'page' : 'domain';
-      scopeSelect.onchange = (e) => {
-        const newScope = e.target.value;
-        storageKey = (newScope === 'page') ? activeUrl : activeHostname;
-        
-        chrome.storage.local.get(['siteTweaks', 'activeScopes'], (res) => {
-          const activeScopes = res.activeScopes || {};
-          activeScopes[activeHostname] = newScope;
-          chrome.storage.local.set({ activeScopes }, () => {
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-              if (tabs[0] && tabs[0].id) {
-                chrome.tabs.sendMessage(tabs[0].id, { action: 'RELOAD_STORAGE' }).catch(() => {});
-              }
-            });
-          });
-          
-          const tweaks = res.siteTweaks || {};
-          const activeData = tweaks[storageKey] || { css: '', htmlRules: [], enabled: true };
-          
-          activeDomainData = {
-            css: activeData.css || '',
-            htmlRules: activeData.htmlRules || [],
-            enabled: activeData.enabled !== false
-          };
-          
-          const cssEditor = document.getElementById('css-editor');
-          if (cssEditor) {
-            cssEditor.value = activeDomainData.css;
-            const lineNumbers = document.getElementById('editor-line-numbers');
-            if (lineNumbers) {
-              const count = cssEditor.value.split('\n').length;
-              let htmlStr = '';
-              for (let i = 1; i <= count; i++) {
-                htmlStr += i + '<br>';
-              }
-              lineNumbers.innerHTML = htmlStr;
-            }
-          }
-          
-          domainToggle.checked = activeDomainData.enabled;
-          renderHTMLRulesList();
-          showStatus(newScope === 'page' ? 'Смена области: страница' : 'Смена области: домен', 'online');
-        });
-      };
-    }
+
 
     // Helper to make gutters scroll-synced, tab-indented, and bracket-closed
     function makeEditorInteractive(textareaId, gutterId) {

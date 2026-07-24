@@ -43,6 +43,9 @@
   let currentDomainTweaks = { css: '', htmlRules: [], enabled: true };
   let activeDomainTweaks = { css: '', htmlRules: [], enabled: true };
   let activePageTweaks = { css: '', htmlRules: [], enabled: true };
+  let cachedSiteTweaks = null;
+  let cachedGlobalEnabled = true;
+  let cachedActiveScopes = {};
   let mutationObserver = null;
   let copiedStyles = null;
 
@@ -174,8 +177,71 @@
     });
   }
 
+  // Apply tweaks from cached data synchronously
+  function applyCachedTweaks() {
+    const globalEnabled = cachedGlobalEnabled !== false;
+    const allTweaks = cachedSiteTweaks || {};
+    const activeScopes = cachedActiveScopes || {};
+    
+    activeScope = activeScopes[hostname] || 'page';
+    
+    const domainData = allTweaks[hostname] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
+    const pageData = allTweaks[normalizeUrl(window.location.href)] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
+
+    activeDomainTweaks = domainData;
+    activePageTweaks = pageData;
+
+    // currentDomainTweaks represents the settings of the ACTIVE scope (either page or domain)
+    currentDomainTweaks = (activeScope === 'page') ? pageData : domainData;
+
+    if (globalEnabled) {
+      let mergedCss = '';
+      let mergedHtmlRules = [];
+      let mergedHtml = '';
+      let mergedJs = '';
+
+      if (domainData.enabled !== false) {
+        mergedCss += (domainData.css || '');
+        mergedHtmlRules = mergedHtmlRules.concat(domainData.htmlRules || []);
+        mergedHtml += (domainData.html || '');
+        mergedJs += (domainData.js || '');
+      }
+
+      if (activeScope === 'page' && pageData.enabled !== false) {
+        mergedCss += '\n' + (pageData.css || '');
+        const pageRules = pageData.htmlRules || [];
+        pageRules.forEach(pRule => {
+          const idx = mergedHtmlRules.findIndex(dRule => dRule.selector === pRule.selector && dRule.action === pRule.action);
+          if (idx >= 0) {
+            mergedHtmlRules[idx] = pRule;
+          } else {
+            mergedHtmlRules.push(pRule);
+          }
+        });
+        
+        if (pageData.html) {
+          mergedHtml = pageData.html;
+        }
+        if (pageData.js) {
+          mergedJs += '\n' + pageData.js;
+        }
+      }
+
+      applyCustomCSS(mergedCss);
+      applyHTMLRules(mergedHtmlRules);
+      applyCustomHTML(mergedHtml);
+      applyCustomJS(mergedJs);
+    } else {
+      applyCustomCSS('');
+      applyCustomHTML('');
+      applyCustomJS('');
+    }
+
+    updateBadgeCount();
+  }
+
   // 2. Load tweaks from storage for current domain & URL
-  function loadAndApplyTweaks() {
+  function loadAndApplyTweaks(forceReloadFromStorage = false) {
     revertAllAppliedRules();
     
     // Synchronously clear active CSS and tweaks in memory to prevent race conditions (stale rules applying during SPA render)
@@ -184,67 +250,16 @@
     }
     currentDomainTweaks = { css: '', htmlRules: [], enabled: true };
 
-    chrome.storage.local.get(['siteTweaks', 'globalEnabled', 'activeScopes'], (result) => {
-      const globalEnabled = result.globalEnabled !== false;
-      const allTweaks = result.siteTweaks || {};
-      const activeScopes = result.activeScopes || {};
-      
-      activeScope = activeScopes[hostname] || 'page';
-      
-      const domainData = allTweaks[hostname] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
-      const pageData = allTweaks[normalizeUrl(window.location.href)] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
-
-      activeDomainTweaks = domainData;
-      activePageTweaks = pageData;
-
-      // currentDomainTweaks represents the settings of the ACTIVE scope (either page or domain)
-      currentDomainTweaks = (activeScope === 'page') ? pageData : domainData;
-
-      if (globalEnabled) {
-        let mergedCss = '';
-        let mergedHtmlRules = [];
-        let mergedHtml = '';
-        let mergedJs = '';
-
-        if (domainData.enabled !== false) {
-          mergedCss += (domainData.css || '');
-          mergedHtmlRules = mergedHtmlRules.concat(domainData.htmlRules || []);
-          mergedHtml += (domainData.html || '');
-          mergedJs += (domainData.js || '');
-        }
-
-        if (activeScope === 'page' && pageData.enabled !== false) {
-          mergedCss += '\n' + (pageData.css || '');
-          const pageRules = pageData.htmlRules || [];
-          pageRules.forEach(pRule => {
-            const idx = mergedHtmlRules.findIndex(dRule => dRule.selector === pRule.selector && dRule.action === pRule.action);
-            if (idx >= 0) {
-              mergedHtmlRules[idx] = pRule;
-            } else {
-              mergedHtmlRules.push(pRule);
-            }
-          });
-          
-          if (pageData.html) {
-            mergedHtml = pageData.html;
-          }
-          if (pageData.js) {
-            mergedJs += '\n' + pageData.js;
-          }
-        }
-
-        applyCustomCSS(mergedCss);
-        applyHTMLRules(mergedHtmlRules);
-        applyCustomHTML(mergedHtml);
-        applyCustomJS(mergedJs);
-      } else {
-        applyCustomCSS('');
-        applyCustomHTML('');
-        applyCustomJS('');
-      }
-
-      updateBadgeCount();
-    });
+    if (cachedSiteTweaks !== null && !forceReloadFromStorage) {
+      applyCachedTweaks();
+    } else {
+      chrome.storage.local.get(['siteTweaks', 'globalEnabled', 'activeScopes'], (result) => {
+        cachedSiteTweaks = result.siteTweaks || {};
+        cachedGlobalEnabled = result.globalEnabled !== false;
+        cachedActiveScopes = result.activeScopes || {};
+        applyCachedTweaks();
+      });
+    }
   }
 
   function updateBadgeCount() {
@@ -411,7 +426,7 @@
           message.action === 'APPLY_CUSTOM_JS' || 
           message.action === 'APPLY_CUSTOM_HTML' || 
           message.action === 'APPLY_HTML_RULES') {
-        loadAndApplyTweaks();
+        loadAndApplyTweaks(true);
         sendResponse({ success: true });
       }
 
@@ -433,7 +448,7 @@
       }
 
       if (message.action === 'RELOAD_STORAGE') {
-        loadAndApplyTweaks();
+        loadAndApplyTweaks(true);
         sendResponse({ success: true });
       }
 
@@ -501,6 +516,8 @@
 
       allTweaks[key] = currentDomainTweaks;
       chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
+        cachedSiteTweaks = allTweaks;
+        cachedActiveScopes = activeScopes;
         updateBadgeCount();
         loadAndApplyTweaks();
       });
