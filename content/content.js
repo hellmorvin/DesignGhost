@@ -665,6 +665,13 @@
           <div class="stp-label">CSS Селектор</div>
           <div class="stp-selector-badge">${escapeHTML(selector)}</div>
         </div>
+        <div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.05); padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">
+          <span class="stp-label" style="margin: 0; font-size: 11px;">Область сохранения:</span>
+          <select id="stp-inspector-scope" class="stp-select" style="width: auto; margin: 0; padding: 2px 24px 2px 8px; font-size: 11px; background-color: rgba(30, 41, 59, 0.9); height: 24px; color: #fff;">
+            <option value="domain">Весь домен</option>
+            <option value="page">Только страница</option>
+          </select>
+        </div>
 
         <!-- TAB 1: VISUAL CSS STYLES -->
         <div class="stp-tab-content active" id="stp-tab-content-style">
@@ -1637,6 +1644,25 @@
       updateClassesAndAttributesUI();
       showToast(`Атрибут ${name} изменен!`);
     };
+
+    // Scope selection inside inspector modal
+    const inspectorScope = document.getElementById('stp-inspector-scope');
+    if (inspectorScope) {
+      inspectorScope.value = activeScope;
+      inspectorScope.onchange = (e) => {
+        const newScope = e.target.value;
+        activeScope = newScope;
+        
+        chrome.storage.local.get(['activeScopes'], (res) => {
+          const scopes = res.activeScopes || {};
+          scopes[hostname] = newScope;
+          chrome.storage.local.set({ activeScopes: scopes }, () => {
+            loadAndApplyTweaks();
+            showToast(newScope === 'page' ? 'Область: Только страница' : 'Область: Весь домен');
+          });
+        });
+      };
+    }
 
     // Run initial classes update
     updateClassesAndAttributesUI();
