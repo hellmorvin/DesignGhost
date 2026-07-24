@@ -175,6 +175,13 @@
   // 2. Load tweaks from storage for current domain & URL
   function loadAndApplyTweaks() {
     revertAllAppliedRules();
+    
+    // Synchronously clear active CSS and tweaks in memory to prevent race conditions (stale rules applying during SPA render)
+    if (customStyleElement) {
+      customStyleElement.textContent = '';
+    }
+    currentDomainTweaks = { css: '', htmlRules: [], enabled: true };
+
     chrome.storage.local.get(['siteTweaks', 'globalEnabled', 'activeScopes'], (result) => {
       const globalEnabled = result.globalEnabled !== false;
       const allTweaks = result.siteTweaks || {};
