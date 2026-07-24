@@ -134,8 +134,9 @@
 
 Вы можете поддержать проект следующими способами:
 1. Поставьте **Звезду** ⭐ этому репозиторию (в верхнем правом углу этой страницы).
-2. Вы можете материально поддержать оригинального разработчика **DesignGhost** (morvin) через DonationAlerts по ссылке:  
-   👉 **[Открыть DonationAlerts для поддержки morvin](https://www.donationalerts.com/r/hellmorvin)**
+2. Вы можете материально поддержать оригинального разработчика **DesignGhost** (morvin):
+   * 👉 **[Открыть DonationAlerts для поддержки morvin](https://www.donationalerts.com/r/hellmorvin)**
+   * 🪙 **USDT (TRC-20)**: `TV59nxuwqqGxeappjPsRAZNdpzs6E7J754`
 
 Большое спасибо за поддержку развития проекта!
 
