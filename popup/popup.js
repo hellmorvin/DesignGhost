@@ -12,6 +12,25 @@
   let storageKey = '';
   let activeDomainData = { css: '', htmlRules: [], enabled: true };
 
+  // Normalize URL to handle trailing slashes, hashes, and strip queries consistently
+  function normalizeUrl(url) {
+    if (!url) return '';
+    try {
+      const urlObj = new URL(url);
+      let pathname = urlObj.pathname;
+      if (pathname.endsWith('/') && pathname.length > 1) {
+        pathname = pathname.slice(0, -1);
+      }
+      let hash = urlObj.hash;
+      if (hash.includes('?')) {
+        hash = hash.split('?')[0];
+      }
+      return urlObj.origin + pathname + hash;
+    } catch (e) {
+      return url;
+    }
+  }
+
   // Image compression and resize helper (downscale to max 1200px and compress to 0.8 JPEG quality)
   function compressAndResizeImage(file, maxDimension = 1200, quality = 0.8) {
     return new Promise((resolve, reject) => {
@@ -65,7 +84,7 @@
       
       const tab = tabs[0];
       activeTab = tab;
-      activeUrl = tab.url;
+      activeUrl = normalizeUrl(tab.url);
 
       if (!tab.url || 
           tab.url.startsWith('chrome://') || 

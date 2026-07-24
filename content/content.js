@@ -13,6 +13,26 @@
   window.__designGhostLoaded = true;
 
   const hostname = window.location.hostname;
+
+  // Normalize URL to handle trailing slashes, hashes, and strip queries consistently
+  function normalizeUrl(url) {
+    if (!url) return '';
+    try {
+      const urlObj = new URL(url);
+      let pathname = urlObj.pathname;
+      if (pathname.endsWith('/') && pathname.length > 1) {
+        pathname = pathname.slice(0, -1);
+      }
+      let hash = urlObj.hash;
+      if (hash.includes('?')) {
+        hash = hash.split('?')[0];
+      }
+      return urlObj.origin + pathname + hash;
+    } catch (e) {
+      return url;
+    }
+  }
+
   let customStyleElement = null;
   let isInspectMode = false;
   let highlightedElement = null;
@@ -163,7 +183,7 @@
       activeScope = activeScopes[hostname] || 'domain';
       
       const domainData = allTweaks[hostname] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
-      const pageData = allTweaks[window.location.href] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
+      const pageData = allTweaks[normalizeUrl(window.location.href)] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
 
       // currentDomainTweaks represents the settings of the ACTIVE scope (either page or domain)
       currentDomainTweaks = (activeScope === 'page') ? pageData : domainData;
@@ -465,7 +485,7 @@
       const allTweaks = result.siteTweaks || {};
       const activeScopes = result.activeScopes || {};
       const currentScope = activeScopes[hostname] || 'domain';
-      const key = (currentScope === 'page') ? window.location.href : hostname;
+      const key = (currentScope === 'page') ? normalizeUrl(window.location.href) : hostname;
 
       allTweaks[key] = currentDomainTweaks;
       chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
