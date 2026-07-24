@@ -48,6 +48,7 @@
   let cachedActiveScopes = {};
   let mutationObserver = null;
   let copiedStyles = null;
+  let mutationTimeout = null;
 
   // Image compression and resize helper (downscale to max 1200px and compress to 0.8 JPEG quality)
   function compressAndResizeImage(file, maxDimension = 1200, quality = 0.8) {
@@ -388,14 +389,19 @@
     });
   }
 
-  // 5. Mutation Observer to keep dynamic SPA pages modified
+  // 5. Mutation Observer to keep dynamic SPA pages modified (debounced for performance)
   function setupMutationObserver() {
     if (mutationObserver) return;
 
     mutationObserver = new MutationObserver(() => {
-      if (currentDomainTweaks && currentDomainTweaks.htmlRules) {
-        applyHTMLRules(currentDomainTweaks.htmlRules);
+      if (mutationTimeout) {
+        clearTimeout(mutationTimeout);
       }
+      mutationTimeout = setTimeout(() => {
+        if (currentDomainTweaks && currentDomainTweaks.htmlRules) {
+          applyHTMLRules(currentDomainTweaks.htmlRules);
+        }
+      }, 50);
     });
 
     const startObserver = () => {
