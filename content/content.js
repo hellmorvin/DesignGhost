@@ -183,9 +183,9 @@
     const globalEnabled = cachedGlobalEnabled !== false;
     const allTweaks = cachedSiteTweaks || {};
     const activeScopes = cachedActiveScopes || {};
-    
+
     activeScope = activeScopes[hostname] || 'page';
-    
+
     const domainData = allTweaks[hostname] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
     const pageData = allTweaks[normalizeUrl(window.location.href)] || { css: '', js: '', html: '', htmlRules: [], enabled: true };
 
@@ -219,7 +219,7 @@
             mergedHtmlRules.push(pRule);
           }
         });
-        
+
         if (pageData.html) {
           mergedHtml = pageData.html;
         }
@@ -244,7 +244,7 @@
   // 2. Load tweaks from storage for current domain & URL
   function loadAndApplyTweaks(forceReloadFromStorage = false) {
     revertAllAppliedRules();
-    
+
     // Synchronously clear active CSS and tweaks in memory to prevent race conditions (stale rules applying during SPA render)
     if (customStyleElement) {
       customStyleElement.textContent = '';
@@ -265,11 +265,11 @@
 
   function updateBadgeCount() {
     if (!currentDomainTweaks) return;
-    const activeRulesCount = (currentDomainTweaks.css ? 1 : 0) + 
-                             (currentDomainTweaks.html ? 1 : 0) + 
-                             (currentDomainTweaks.js ? 1 : 0) + 
-                             (currentDomainTweaks.htmlRules ? currentDomainTweaks.htmlRules.filter(r => r.active !== false).length : 0);
-    chrome.runtime.sendMessage({ action: 'UPDATE_BADGE', count: activeRulesCount }).catch(() => {});
+    const activeRulesCount = (currentDomainTweaks.css ? 1 : 0) +
+      (currentDomainTweaks.html ? 1 : 0) +
+      (currentDomainTweaks.js ? 1 : 0) +
+      (currentDomainTweaks.htmlRules ? currentDomainTweaks.htmlRules.filter(r => r.active !== false).length : 0);
+    chrome.runtime.sendMessage({ action: 'UPDATE_BADGE', count: activeRulesCount }).catch(() => { });
   }
 
   // 3. Inject CSS into live page
@@ -286,7 +286,7 @@
     if (!container) {
       container = document.createElement('div');
       container.id = 'site-tweaker-custom-html-container';
-      
+
       const insertContainer = () => {
         const target = document.body || document.documentElement;
         if (target && !document.getElementById('site-tweaker-custom-html-container')) {
@@ -300,7 +300,7 @@
         document.addEventListener('DOMContentLoaded', insertContainer);
       }
     }
-    
+
     // Avoid resetting innerHTML unnecessarily to avoid page churn
     if (container.innerHTML !== (htmlCode || '')) {
       container.innerHTML = htmlCode || '';
@@ -428,10 +428,10 @@
   // 6. Listeners for extension messages from popup
   function setupMessageListeners() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.action === 'APPLY_CUSTOM_CSS' || 
-          message.action === 'APPLY_CUSTOM_JS' || 
-          message.action === 'APPLY_CUSTOM_HTML' || 
-          message.action === 'APPLY_HTML_RULES') {
+      if (message.action === 'APPLY_CUSTOM_CSS' ||
+        message.action === 'APPLY_CUSTOM_JS' ||
+        message.action === 'APPLY_CUSTOM_HTML' ||
+        message.action === 'APPLY_HTML_RULES') {
         loadAndApplyTweaks(true);
         sendResponse({ success: true });
       }
@@ -481,7 +481,7 @@
           } else {
             sendResponse({ success: false, error: 'Элемент не найден' });
           }
-        } catch(e) {
+        } catch (e) {
           sendResponse({ success: false, error: e.message });
         }
       }
@@ -705,7 +705,7 @@
 
     const tagName = el.nodeName.toLowerCase();
     const classes = getClasses(el);
-    
+
     if (classes.length > 0) {
       options.push(`${tagName}.${CSS.escape(classes[0])}`);
       options.push(`.${CSS.escape(classes[0])}`);
@@ -778,7 +778,7 @@
             matchingRules.push(rule);
             uniqueMatchingSelectors.add(rule.selector);
           }
-        } catch (e) {}
+        } catch (e) { }
       });
     }
 
@@ -1060,7 +1060,7 @@
     const tabStyleBtn = document.getElementById('stp-tab-btn-style');
     const tabHtmlBtn = document.getElementById('stp-tab-btn-html');
     const tabClassesBtn = document.getElementById('stp-tab-btn-classes');
-    
+
     const tabStyleContent = document.getElementById('stp-tab-content-style');
     const tabHtmlContent = document.getElementById('stp-tab-content-html');
     const tabClassesContent = document.getElementById('stp-tab-content-classes');
@@ -1196,7 +1196,7 @@
     if (computed.backgroundImage && computed.backgroundImage !== 'none') {
       btnClearBgImg.style.display = 'block';
       if (bgOptionsContainer) bgOptionsContainer.style.display = 'flex';
-      
+
       if (selectBgSize) {
         const sz = el.style.backgroundSize || computed.backgroundSize;
         if (['cover', 'contain', 'auto'].includes(sz)) selectBgSize.value = sz;
@@ -1231,12 +1231,12 @@
       const imgOptionsContainer = document.getElementById('stp-img-options');
       selectImgFit = document.getElementById('stp-img-fit');
       selectImgPosition = document.getElementById('stp-img-position');
-      
+
       if (imgOptionsContainer) imgOptionsContainer.style.display = 'flex';
       if (el.hasAttribute('data-stp-original-src')) {
         document.getElementById('stp-btn-revert-img-src').style.display = 'block';
       }
-      
+
       if (selectImgFit) {
         const fit = el.style.objectFit || computed.objectFit;
         if (['fill', 'cover', 'contain', 'none'].includes(fit)) selectImgFit.value = fit;
@@ -1340,7 +1340,7 @@
       el.style.setProperty('font-size', fontSize.value + 'px', 'important');
       el.style.setProperty('border-radius', borderRadius.value + 'px', 'important');
       el.style.setProperty('opacity', (opacity.value / 100).toString(), 'important');
-      
+
       if (paddingInput.value !== '') {
         el.style.setProperty('padding', paddingInput.value + 'px', 'important');
       } else {
@@ -1482,7 +1482,7 @@
           el.src = el.getAttribute('data-stp-original-src');
           el.removeAttribute('data-stp-original-src');
         }
-        
+
         el.style.removeProperty('object-fit');
         el.style.removeProperty('object-position');
         const imgOptionsContainer = document.getElementById('stp-img-options');
@@ -1699,7 +1699,7 @@
     // Classes and attributes dynamic inspector logic
     const classesContainer = document.getElementById('stp-classes-container');
     const attributesList = document.getElementById('stp-attributes-list');
-    
+
     const updateClassesAndAttributesUI = () => {
       if (!classesContainer || !attributesList) return;
 
@@ -1710,18 +1710,18 @@
       } else {
         Array.from(el.classList).forEach(cls => {
           if (cls === 'site-tweaker-highlight-box' || cls === 'site-tweaker-selected-box') return;
-          
+
           const badge = document.createElement('span');
           badge.className = 'stp-class-badge';
           badge.innerHTML = `
             <span>.${cls}</span>
             <span class="stp-class-badge-remove" data-class="${cls}">&times;</span>
           `;
-          
+
           badge.querySelector('.stp-class-badge-remove').onclick = (e) => {
             const classToRemove = e.target.getAttribute('data-class');
             el.classList.remove(classToRemove);
-            
+
             const rule = {
               id: 'rule_' + Date.now(),
               selector: activeSelector,
@@ -1734,7 +1734,7 @@
             updateClassesAndAttributesUI();
             showToast(`Класс .${classToRemove} удален.`);
           };
-          
+
           classesContainer.appendChild(badge);
         });
       }
@@ -1743,10 +1743,10 @@
       attributesList.innerHTML = '';
       const skipAttrs = ['id', 'class', 'style', 'data-stp-original-html', 'data-stp-modified-html', 'data-stp-original-class', 'data-stp-original-src', 'data-stp-original-class'];
       let attrCount = 0;
-      
+
       Array.from(el.attributes).forEach(attr => {
         if (skipAttrs.includes(attr.name) || attr.name.startsWith('data-stp-original-')) return;
-        
+
         attrCount++;
         const row = document.createElement('div');
         row.className = 'stp-attribute-row';
@@ -1757,17 +1757,17 @@
           </div>
           <button class="stp-class-badge-remove" data-attr="${escapeHTML(attr.name)}">&times;</button>
         `;
-        
+
         row.querySelector('.stp-class-badge-remove').onclick = (e) => {
           const attrToRemove = e.target.getAttribute('data-attr');
           el.removeAttribute(attrToRemove);
-          
+
           removeHTMLRule(activeSelector, 'edit_attribute', attrToRemove);
-          
+
           updateClassesAndAttributesUI();
           showToast(`Атрибут ${attrToRemove} удален.`);
         };
-        
+
         attributesList.appendChild(row);
       });
 
@@ -1781,7 +1781,7 @@
       const input = document.getElementById('stp-input-add-class');
       const val = input.value.trim();
       if (!val) return;
-      
+
       el.classList.add(val);
       const rule = {
         id: 'rule_' + Date.now(),
@@ -1803,9 +1803,9 @@
       const inputVal = document.getElementById('stp-input-add-attr-val');
       const name = inputName.value.trim();
       const val = inputVal.value.trim();
-      
+
       if (!name) return;
-      
+
       el.setAttribute(name, val);
       const rule = {
         id: 'rule_' + Date.now(),
@@ -1816,7 +1816,7 @@
         active: true
       };
       addOrUpdateHTMLRule(rule);
-      
+
       inputName.value = '';
       inputVal.value = '';
       updateClassesAndAttributesUI();
@@ -1830,12 +1830,12 @@
       inspectorScope.onchange = (e) => {
         const newScope = e.target.value;
         activeScope = newScope;
-        
+
         chrome.storage.local.get(['activeScopes'], (res) => {
           const scopes = res.activeScopes || {};
           scopes[hostname] = newScope;
           chrome.storage.local.set({ activeScopes: scopes }, () => {
-            loadAndApplyTweaks();
+            cachedActiveScopes = scopes;
             showToast(newScope === 'page' ? 'Область: Только на эту страницу' : 'Область: На все страницы сайта');
           });
         });
@@ -1952,12 +1952,12 @@
   // Execute custom JavaScript code in the main world context
   function executeConsoleJS(code, sendResponse) {
     const eventId = 'dg_console_result_' + Math.random().toString(36).substr(2, 9);
-    
+
     const handler = (e) => {
       window.removeEventListener(eventId, handler);
       sendResponse(e.detail);
     };
-    
+
     window.addEventListener(eventId, handler);
 
     // Inject main world script
@@ -2032,7 +2032,7 @@
   // Search DOM elements by selector or text content
   function searchElements(query) {
     let elements = [];
-    
+
     // 1. Try as CSS Selector
     try {
       const matches = document.querySelectorAll(query);
@@ -2042,7 +2042,7 @@
         }
         elements.push(el);
       });
-    } catch (e) {}
+    } catch (e) { }
 
     // 2. Search by text content
     const textQuery = query.toLowerCase();
@@ -2050,7 +2050,7 @@
       const allElems = document.querySelectorAll('body *:not(script):not(style):not(#site-tweaker-inspector-modal):not(.site-tweaker-highlight-box)');
       allElems.forEach(el => {
         if (elements.includes(el)) return;
-        
+
         let directText = '';
         for (let child of el.childNodes) {
           if (child.nodeType === Node.TEXT_NODE) {
