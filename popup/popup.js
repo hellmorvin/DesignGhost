@@ -11,6 +11,26 @@
   let activeUrl = '';
   let storageKey = '';
   let activeDomainData = { css: '', htmlRules: [], enabled: true };
+  let cssHistoryStack = [];
+  let cssHistoryIndex = -1;
+  let autoSaveTimeout = null;
+  let errorLogs = [];
+
+  window.onerror = function (msg, url, line) {
+    logError(`Ошибка: ${msg} в ${url}:${line}`);
+    return false;
+  };
+
+  function logError(msg) {
+    console.error(msg);
+    errorLogs.unshift(`[${new Date().toLocaleTimeString()}] ${msg}`);
+    if (errorLogs.length > 20) {
+      errorLogs.pop();
+    }
+    chrome.storage.local.set({ stpErrorLogs: errorLogs }, () => {
+      renderErrorLogsUI();
+    });
+  }
 
   // Normalize URL to handle trailing slashes, hashes, and strip queries consistently
   function normalizeUrl(url) {
@@ -125,14 +145,15 @@
             injectContentScript(tab, domainData);
           } else {
             isInspectMode = response.isInspectMode;
-            setupUI({
+             setupUI({
               hostname: activeHostname,
               css: domainData.css || '',
               js: domainData.js || '',
               html: domainData.html || '',
               htmlRules: domainData.htmlRules || [],
               enabled: domainData.enabled !== false,
-              isInspectMode: isInspectMode
+              isInspectMode: isInspectMode,
+              liveSyncUrl: domainData.liveSyncUrl || ''
             });
           }
         });
@@ -144,6 +165,27 @@
     setupBackupControls();
     setupConsole();
     setupDOMSearch();
+
+    // v1.3.0 Initializations
+    setupThemeSelector();
+    renderBackupsUI();
+    setupPopupHotkeys();
+
+    // Click handler for manual backups
+    const btnCreateBackupNow = document.getElementById('btn-create-backup-now');
+    if (btnCreateBackupNow) {
+      btnCreateBackupNow.onclick = () => {
+        triggerAutoBackup(true);
+        showStatus('Резервная копия создана вручную!', 'online');
+      };
+    }
+
+    // Click handler for exporting as CSS file
+    const btnExportCss = document.getElementById('btn-export-css');
+    if (btnExportCss) {
+      btnExportCss.onclick = exportCSSFile;
+    }
+
   }
 
   // Inject content script and stylesheet if missing
@@ -174,7 +216,8 @@
           html: domainData.html || '',
           htmlRules: domainData.htmlRules || [],
           enabled: domainData.enabled !== false,
-          isInspectMode: false
+          isInspectMode: false,
+          liveSyncUrl: domainData.liveSyncUrl || ''
         });
       });
     });
@@ -191,27 +234,51 @@
 
     // Update Header Domain name & switch
     const domainLabel = document.getElementById('current-domain');
-    const scopeLabel = (storageKey === activeUrl) ? 'Только страница' : 'Весь домен';
-    domainLabel.textContent = `${activeHostname} (${scopeLabel})`;
+    domainLabel.textContent = activeHostname;
     domainLabel.style.color = '';
 
     const domainToggle = document.getElementById('domain-enable-toggle');
     domainToggle.checked = activeDomainData.enabled;
     domainToggle.disabled = false;
     
+    
+    const liveSyncInput = document.getElementById('live-sync-url');
+    const liveSyncBtn = document.getElementById('btn-toggle-live-sync');
+    if (liveSyncInput && liveSyncBtn) {
+      const storedUrl = data.liveSyncUrl || '';
+      liveSyncInput.value = storedUrl;
+      if (storedUrl) {
+        liveSyncBtn.textContent = 'Остановить';
+        liveSyncBtn.classList.remove('btn-primary');
+        liveSyncBtn.classList.add('btn-danger');
+      } else {
+        liveSyncBtn.textContent = 'Запустить';
+        liveSyncBtn.classList.remove('btn-danger');
+        liveSyncBtn.classList.add('btn-primary');
+      }
+    }
+
     domainToggle.onchange = (e) => {
       const isEnabled = e.target.checked;
       activeDomainData.enabled = isEnabled;
-      
+
       chrome.storage.local.get(['siteTweaks'], (result) => {
         const allTweaks = result.siteTweaks || {};
-        allTweaks[storageKey] = {
-          ...allTweaks[storageKey],
-          enabled: isEnabled
-        };
+
+        // Always save enabled flag to BOTH hostname AND page-url keys
+        // so the flag is respected regardless of active scope
+        if (!allTweaks[activeHostname]) allTweaks[activeHostname] = { css: '', htmlRules: [], enabled: true };
+        if (!allTweaks[activeUrl]) allTweaks[activeUrl] = { css: '', htmlRules: [], enabled: true };
+
+        allTweaks[activeHostname].enabled = isEnabled;
+        allTweaks[activeUrl].enabled = isEnabled;
+
+        // Also update the current storageKey to be safe
+        if (allTweaks[storageKey]) allTweaks[storageKey].enabled = isEnabled;
+
         chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
           chrome.tabs.sendMessage(activeTab.id, { action: 'RELOAD_STORAGE' }, () => {
-            showStatus(isEnabled ? 'Изменения включены' : 'Изменения отключены', 'online');
+            showStatus(isEnabled ? 'Изменения включены' : 'Изменения отключены', isEnabled ? 'online' : 'offline');
           });
         });
       });
@@ -280,6 +347,27 @@
 
     // Run interactive bindings
     const updateCssGutter = makeEditorInteractive('css-editor', 'editor-line-numbers');
+
+    setupCSSHistory(data.css);
+
+    cssEditor.addEventListener('input', () => {
+      const statusEl = document.getElementById('auto-save-status');
+      if (statusEl) {
+        statusEl.innerHTML = '<span style="display:inline-block; width:6px; height:6px; background:#f59e0b; border-radius:50%;"></span> Сохраняется...';
+      }
+
+      if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
+      autoSaveTimeout = setTimeout(() => {
+        const val = cssEditor.value;
+        saveCSSQuietly(val);
+        pushCssHistory(val);
+        
+        if (statusEl) {
+          statusEl.innerHTML = '<span style="display:inline-block; width:6px; height:6px; background:#10b981; border-radius:50%;"></span> Сохранено';
+        }
+        triggerAutoBackup();
+      }, 2000);
+    });
 
     // 1. CSS IMAGE INSERTION
     const btnInsertImgCss = document.getElementById('btn-insert-img-css');
@@ -399,8 +487,7 @@
           }
           chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
             chrome.tabs.sendMessage(activeTab.id, { action: 'APPLY_CUSTOM_CSS', css: '' }, () => {
-              showStatus('CSS очищен', 'online');
-              renderSitesList();
+              showStatus('Инспектор активирован', 'working');
             });
           });
         });
@@ -422,10 +509,12 @@
         if (res && res.isInspectMode) {
           inspectorBtn.classList.add('active');
           inspectorBtnText.textContent = 'Выключить Инспектор';
-          window.close(); // Close popup so they can inspect
+          window.close(); // Close popup so user can click elements
         } else {
+          // Just turn off inspector — extension keeps working
           inspectorBtn.classList.remove('active');
           inspectorBtnText.textContent = 'Включить Инспектор';
+          // Do NOT close popup, do NOT disable extension
         }
       });
     };
@@ -503,6 +592,7 @@
     activeDomainData.htmlRules.forEach((rule) => {
       const card = document.createElement('div');
       card.className = 'rule-card';
+      card.setAttribute('draggable', 'true');
 
       let badgeText = 'Скрыть';
       let badgeClass = 'badge-hide';
@@ -524,10 +614,18 @@
       if (rule.action === 'edit_html' && rule.value !== undefined) {
         const escaped = escapeHTML(rule.value);
         previewValHtml = `<span class="rule-preview-val" title="${escaped}">${escaped.substring(0, 30)}${escaped.length > 30 ? '...' : ''}</span>`;
-      } else if (rule.action === 'edit_style' && typeof rule.value === 'object') {
+      } else if (rule.action === 'edit_style' && rule.value) {
+        let stylesObj = rule.value;
+        if (typeof rule.value === 'string') {
+          try { stylesObj = JSON.parse(rule.value); } catch(e) {}
+        }
         let stylesStr = '';
-        for (const [prop, val] of Object.entries(rule.value)) {
-          stylesStr += `${prop}: ${val}; `;
+        if (typeof stylesObj === 'object') {
+          for (const [prop, val] of Object.entries(stylesObj)) {
+            stylesStr += `${prop}: ${val}; `;
+          }
+        } else {
+          stylesStr = String(stylesObj);
         }
         const escaped = escapeHTML(stylesStr);
         previewValHtml = `<span class="rule-preview-val" title="${escaped}">${escaped.substring(0, 30)}${escaped.length > 30 ? '...' : ''}</span>`;
@@ -544,6 +642,7 @@
               <input type="checkbox" class="rule-toggle" data-id="${rule.id}" ${rule.active !== false ? 'checked' : ''}>
               <span class="slider round"></span>
             </label>
+            
             <button class="btn-icon btn-icon-danger rule-delete" data-id="${rule.id}" title="Удалить правило">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="3 6 5 6 21 6"></polyline>
@@ -564,6 +663,7 @@
         saveAndSyncRules();
       };
 
+      
       card.querySelector('.rule-delete').onclick = () => {
         activeDomainData.htmlRules = activeDomainData.htmlRules.filter(r => r.id !== rule.id);
         saveAndSyncRules();
@@ -571,6 +671,8 @@
 
       container.appendChild(card);
     });
+
+    setupRuleDragAndDrop();
   }
 
   // Save rules to storage and notify content script
@@ -586,6 +688,7 @@
           showStatus('Правила обновлены!', 'online');
           renderHTMLRulesList();
           renderSitesList();
+          triggerAutoBackup();
         });
       });
     });
@@ -603,9 +706,11 @@
     const valueGroup = document.getElementById('manual-value-group');
     const textareaValue = document.getElementById('manual-value');
 
+    let editingRuleId = null;
+
     // Trigger input adjustments based on action selection
     selectAction.onchange = () => {
-      if (selectAction.value === 'edit_html') {
+      if (['edit_html', 'edit_style', 'edit_attribute'].includes(selectAction.value)) {
         valueGroup.style.display = 'block';
       } else {
         valueGroup.style.display = 'none';
@@ -613,9 +718,47 @@
     };
 
     btnAddManual.onclick = () => {
+      editingRuleId = null;
       form.style.display = 'flex';
       btnAddManual.style.display = 'none';
       inputSelector.focus();
+    };
+
+    window.editManualRuleFallback = (rule) => {
+      editingRuleId = rule.id;
+      inputSelector.value = rule.selector;
+      selectAction.value = rule.action;
+      if (['edit_html', 'edit_style', 'edit_attribute'].includes(rule.action)) {
+        valueGroup.style.display = 'block';
+        if (rule.action === 'edit_style') {
+          textareaValue.value = typeof rule.value === 'object' ? JSON.stringify(rule.value, null, 2) : rule.value;
+        } else if (rule.action === 'edit_attribute') {
+           textareaValue.value = JSON.stringify({ attribute: rule.attribute, value: rule.value }, null, 2);
+        } else {
+          textareaValue.value = rule.value || '';
+        }
+      } else {
+        valueGroup.style.display = 'none';
+        textareaValue.value = '';
+      }
+      form.style.display = 'flex';
+      btnAddManual.style.display = 'none';
+      window.scrollTo({ top: form.offsetTop - 50, behavior: 'smooth' });
+      inputSelector.focus();
+    };
+
+    window.editManualRule = (rule) => {
+      if (!activeTab) {
+        window.editManualRuleFallback(rule);
+        return;
+      }
+      chrome.tabs.sendMessage(activeTab.id, { action: 'EDIT_RULE_IN_INSPECTOR', selector: rule.selector }, (res) => {
+        if (chrome.runtime.lastError || !res || !res.success) {
+          window.editManualRuleFallback(rule);
+        } else {
+          window.close(); // Close popup so they can edit in the page
+        }
+      });
     };
 
     btnCancel.onclick = () => {
@@ -642,21 +785,52 @@
         return;
       }
 
-      const rule = {
-        id: 'rule_' + Date.now(),
-        selector: selector,
-        action: action,
-        value: action === 'edit_html' ? val : '',
-        active: true
-      };
-
-      if (!activeDomainData.htmlRules) {
-        activeDomainData.htmlRules = [];
+      let finalValue = val;
+      let finalAttribute = undefined;
+      
+      if (action === 'edit_style') {
+        try { finalValue = JSON.parse(val); } catch(e) { alert('Неверный формат JSON для стиля'); return; }
+      } else if (action === 'edit_attribute') {
+        try { 
+          const obj = JSON.parse(val);
+          finalAttribute = obj.attribute;
+          finalValue = obj.value;
+        } catch(e) { alert('Неверный JSON для атрибута. Ожидается {"attribute": "...", "value": "..."}'); return; }
+      } else if (action === 'hide' || action === 'remove') {
+        finalValue = '';
       }
-      activeDomainData.htmlRules.push(rule);
+
+      if (editingRuleId) {
+        const existing = activeDomainData.htmlRules.find(r => r.id === editingRuleId);
+        if (existing) {
+          existing.selector = selector;
+          existing.action = action;
+          existing.value = finalValue;
+          if (finalAttribute) {
+            existing.attribute = finalAttribute;
+          } else {
+            delete existing.attribute;
+          }
+        }
+      } else {
+        const rule = {
+          id: 'rule_' + Date.now(),
+          selector: selector,
+          action: action,
+          value: finalValue,
+          active: true
+        };
+        if (finalAttribute) rule.attribute = finalAttribute;
+
+        if (!activeDomainData.htmlRules) {
+          activeDomainData.htmlRules = [];
+        }
+        activeDomainData.htmlRules.push(rule);
+      }
       
       saveAndSyncRules();
       resetForm();
+      renderHTMLRulesList(); // Re-render the list immediately
     };
 
     function resetForm() {
@@ -666,6 +840,7 @@
       selectAction.value = 'hide';
       valueGroup.style.display = 'none';
       textareaValue.value = '';
+      editingRuleId = null;
     }
   }
 
@@ -756,6 +931,41 @@
         });
       }
     };
+
+    // Reset current site binding
+    const btnResetDomain = document.getElementById('btn-reset-domain');
+    if (btnResetDomain) {
+      btnResetDomain.onclick = () => {
+        if (confirm(`Вы уверены, что хотите сбросить все изменения для сайта ${activeHostname}?`)) {
+          chrome.storage.local.get(['siteTweaks'], (storageResult) => {
+            const allTweaks = storageResult.siteTweaks || {};
+            delete allTweaks[activeHostname];
+            delete allTweaks[activeUrl];
+            
+            chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
+              showStatus('Изменения сброшены', 'online');
+              
+              activeDomainData = { css: '', htmlRules: [], enabled: true };
+              const cssEditor = document.getElementById('css-editor');
+              if (cssEditor) {
+                cssEditor.value = '';
+                if (cssEditor.oninput) cssEditor.oninput();
+              }
+              
+              const domainToggle = document.getElementById('domain-enable-toggle');
+              if (domainToggle) domainToggle.checked = true;
+              
+              renderHTMLRulesList();
+              renderSitesList();
+
+              if (activeTab) {
+                chrome.tabs.sendMessage(activeTab.id, { action: 'RELOAD_STORAGE' }).catch(() => {});
+              }
+            });
+          });
+        }
+      };
+    }
   }
 
   // Render configured websites list
@@ -1122,32 +1332,17 @@
           item.className = 'search-result-item';
 
           item.innerHTML = `
-            <div class="search-result-info">
-              <span class="search-result-tag" title="${escapeHTML(el.selector)}">${escapeHTML(el.selector)}</span>
-              <span class="search-result-text" title="${escapeHTML(el.textPreview)}">${escapeHTML(el.textPreview || '<пустой элемент>')}</span>
-            </div>
-            <div class="search-result-actions">
-              <button class="btn-icon btn-highlight" title="Подсветить на странице">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <line x1="12" y1="8" x2="12" y2="12"></line>
-                  <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                </svg>
-              </button>
-              <button class="btn-icon btn-edit-specific" title="Изменить в инспекторе" style="color: var(--success); border-color: rgba(16, 185, 129, 0.2);">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 20h9"></path>
-                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                </svg>
-              </button>
-              <button class="btn-icon btn-icon-danger btn-hide-specific" title="Скрыть элемент">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                  <line x1="1" y1="1" x2="23" y2="23"></line>
-                </svg>
-              </button>
-            </div>
-          `;
+          <span style="font-size:11px; color:var(--text-main); font-weight:500;">Бэкап от ${new Date(b.timestamp).toLocaleTimeString()}</span>
+          <div style="display: flex; gap: 4px;">
+            <button class="btn btn-secondary btn-restore-backup" style="font-size:10px; padding:2px 8px; height:auto;">Восстановить</button>
+            <button class="btn-icon btn-icon-danger btn-delete-backup" style="padding: 2px; height: 18px; width: 18px;" title="Удалить бэкап">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+            </button>
+          </div>
+        `;
 
           // Highlight bindings
           const highlightBtn = item.querySelector('.btn-highlight');
@@ -1193,6 +1388,353 @@
         performSearch();
       }
     };
+  }
+  // --- Theme Selector Logic ---
+  function setupThemeSelector() {
+    const selector = document.getElementById('theme-selector');
+    if (!selector) return;
+
+    chrome.storage.local.get(['stpThemeChoice'], (res) => {
+      const choice = res.stpThemeChoice || 'auto';
+      selector.value = choice;
+      applyTheme(choice);
+    });
+
+    selector.onchange = (e) => {
+      const choice = e.target.value;
+      chrome.storage.local.set({ stpThemeChoice: choice }, () => {
+        applyTheme(choice);
+        showStatus('Тема изменена', 'online');
+      });
+    };
+  }
+
+  function applyTheme(choice) {
+    document.body.classList.remove('light-theme');
+    if (choice === 'light') {
+      document.body.classList.add('light-theme');
+    } else if (choice === 'auto') {
+      const isLight = !window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (isLight) {
+        document.body.classList.add('light-theme');
+      }
+    }
+  }
+
+
+
+  // --- Backup Manager Logic ---
+  function triggerAutoBackup(forced = false) {
+    const backupInterval = 5 * 60 * 1000;
+    chrome.storage.local.get(['siteTweaks', 'lastBackupTime', 'backups'], (res) => {
+      const lastTime = res.lastBackupTime || 0;
+      const now = Date.now();
+      if (!forced && (now - lastTime < backupInterval)) {
+        return;
+      }
+
+      let backups = res.backups || [];
+      const newBackup = {
+        id: 'backup_' + now,
+        timestamp: now,
+        data: JSON.parse(JSON.stringify(res.siteTweaks || {}))
+      };
+
+      backups.unshift(newBackup);
+      if (backups.length > 5) {
+        backups.pop();
+      }
+
+      chrome.storage.local.set({
+        backups: backups,
+        lastBackupTime: now
+      }, () => {
+        renderBackupsUI();
+      });
+    });
+  }
+
+  function renderBackupsUI() {
+    const list = document.getElementById('backups-list');
+    if (!list) return;
+
+    chrome.storage.local.get(['backups'], (res) => {
+      const backups = res.backups || [];
+      if (backups.length === 0) {
+        list.innerHTML = '<div class="empty-state">Нет сохраненных резервных копий</div>';
+        return;
+      }
+
+      list.innerHTML = '';
+      backups.forEach(b => {
+        const item = document.createElement('div');
+        item.style.display = 'flex';
+        item.style.justifyContent = 'space-between';
+        item.style.alignItems = 'center';
+        item.style.background = 'rgba(255,255,255,0.03)';
+        item.style.padding = '6px 8px';
+        item.style.borderRadius = '6px';
+        item.style.border = '1px solid var(--border)';
+
+        item.innerHTML = `
+          <span style="font-size:11px; color:var(--text-main); font-weight:500;">Бэкап от ${new Date(b.timestamp).toLocaleTimeString()}</span>
+          <button class="btn btn-secondary btn-restore-backup" style="font-size:10px; padding:2px 8px; height:auto;">Восстановить</button>
+        `;
+
+        
+        const delBtn = item.querySelector('.btn-delete-backup');
+        if (delBtn) {
+          delBtn.onclick = () => {
+            if (confirm('Вы уверены, что хотите удалить эту резервную копию?')) {
+              chrome.storage.local.get(['backups'], (res) => {
+                let currentBackups = res.backups || [];
+                currentBackups = currentBackups.filter(backup => backup.id !== b.id);
+                chrome.storage.local.set({ backups: currentBackups }, () => {
+                  renderBackupsUI();
+                });
+              });
+            }
+          };
+        }
+        item.querySelector('.btn-restore-backup').onclick = () => {
+          if (confirm('Восстановить настройки из этой резервной копии? Текущие настройки будут перезаписаны.')) {
+            chrome.storage.local.set({ siteTweaks: b.data }, () => {
+              showStatus('Настройки восстановлены!', 'online');
+              initPopup();
+              if (activeTab) {
+                chrome.tabs.sendMessage(activeTab.id, { action: 'RELOAD_STORAGE' }).catch(() => {});
+              }
+            });
+          }
+        };
+
+        list.appendChild(item);
+      });
+    });
+  }
+
+
+
+  // --- CSS Undo/Redo Engine ---
+  function updateUndoRedoButtonsState() {
+    const btnUndo = document.getElementById('btn-undo-css');
+    const btnRedo = document.getElementById('btn-redo-css');
+    if (btnUndo) btnUndo.style.opacity = cssHistoryIndex > 0 ? '1' : '0.4';
+    if (btnRedo) btnRedo.style.opacity = cssHistoryIndex < cssHistoryStack.length - 1 ? '1' : '0.4';
+  }
+
+  function setupCSSHistory(initialValue) {
+    cssHistoryStack = [initialValue || ''];
+    cssHistoryIndex = 0;
+    updateUndoRedoButtonsState();
+
+    function updateGutterSilently() {
+      const cssEditor = document.getElementById('css-editor');
+      const gutter = document.getElementById('editor-line-numbers');
+      if (cssEditor && gutter) {
+        const count = cssEditor.value.split('\n').length;
+        let htmlStr = '';
+        for (let i = 1; i <= count; i++) {
+          htmlStr += i + '<br>';
+        }
+        gutter.innerHTML = htmlStr;
+      }
+    }
+
+    const btnUndo = document.getElementById('btn-undo-css');
+    const btnRedo = document.getElementById('btn-redo-css');
+    const cssEditor = document.getElementById('css-editor');
+
+    if (btnUndo) {
+      btnUndo.onclick = () => {
+        if (cssHistoryIndex > 0) {
+          cssHistoryIndex--;
+          cssEditor.value = cssHistoryStack[cssHistoryIndex];
+          updateGutterSilently();
+          saveCSSQuietly(cssEditor.value);
+          updateUndoRedoButtonsState();
+        }
+      };
+    }
+
+    if (btnRedo) {
+      btnRedo.onclick = () => {
+        if (cssHistoryIndex < cssHistoryStack.length - 1) {
+          cssHistoryIndex++;
+          cssEditor.value = cssHistoryStack[cssHistoryIndex];
+          updateGutterSilently();
+          saveCSSQuietly(cssEditor.value);
+          updateUndoRedoButtonsState();
+        }
+      };
+    }
+  }
+
+  function pushCssHistory(value) {
+    if (cssHistoryIndex >= 0 && cssHistoryStack[cssHistoryIndex] === value) return;
+    cssHistoryStack = cssHistoryStack.slice(0, cssHistoryIndex + 1);
+    cssHistoryStack.push(value);
+    if (cssHistoryStack.length > 30) {
+      cssHistoryStack.shift();
+    }
+    cssHistoryIndex = cssHistoryStack.length - 1;
+    updateUndoRedoButtonsState();
+  }
+
+  function saveCSSQuietly(cssVal) {
+    activeDomainData.css = cssVal;
+    chrome.storage.local.get(['siteTweaks'], (result) => {
+      const allTweaks = result.siteTweaks || {};
+      allTweaks[storageKey] = {
+        ...allTweaks[storageKey],
+        css: cssVal
+      };
+      chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
+        chrome.tabs.sendMessage(activeTab.id, { action: 'APPLY_CUSTOM_CSS', css: cssVal }).catch(() => {});
+      });
+    });
+  }
+
+  // --- Hotkeys Listener ---
+  function setupPopupHotkeys() {
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        const cssEditor = document.getElementById('css-editor');
+        if (cssEditor) {
+          saveCSSQuietly(cssEditor.value);
+          pushCssHistory(cssEditor.value);
+          showStatus('CSS сохранен вручную!', 'online');
+          triggerAutoBackup(true);
+        }
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'i') {
+        e.preventDefault();
+        const btnToggleInspector = document.getElementById('btn-toggle-inspector');
+        if (btnToggleInspector) btnToggleInspector.click();
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'e') {
+        e.preventDefault();
+        const toggle = document.getElementById('domain-enable-toggle');
+        if (toggle) {
+          toggle.checked = !toggle.checked;
+          toggle.onchange({ target: toggle });
+        }
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        initPopup();
+        showStatus('Правила перезагружены (Ctrl+Shift+R)', 'online');
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        const btnClear = document.getElementById('btn-clear-css');
+        if (btnClear) btnClear.click();
+      }
+    });
+  }
+
+  // --- Export CSS File ---
+  function exportCSSFile() {
+    const cssEditor = document.getElementById('css-editor');
+    const cssContent = cssEditor ? cssEditor.value : '';
+    if (!cssContent.trim()) {
+      alert('Нет стилей для экспорта!');
+      return;
+    }
+
+    const commentHeader = `/* DesignGhost CSS Export for ${activeHostname} */\n/* Generated on: ${new Date().toLocaleString()} */\n\n`;
+    const fullCss = commentHeader + cssContent;
+    const blob = new Blob([fullCss], { type: 'text/css;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${activeHostname}_custom_styles.css`);
+    link.click();
+    showStatus('CSS файл скачан', 'online');
+  }
+
+  // --- Rules List Drag and Drop Order ---
+  function setupRuleDragAndDrop() {
+    const list = document.getElementById('html-rules-list');
+    if (!list) return;
+
+    let dragSrcEl = null;
+
+    list.addEventListener('dragstart', (e) => {
+      const target = e.target.closest('.rule-card');
+      if (!target) return;
+      dragSrcEl = target;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/html', target.innerHTML);
+      target.style.opacity = '0.4';
+    });
+
+    list.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      return false;
+    });
+
+    list.addEventListener('dragenter', (e) => {
+      const target = e.target.closest('.rule-card');
+      if (target && target !== dragSrcEl) {
+        target.style.borderTop = '2px solid var(--accent)';
+      }
+    });
+
+    list.addEventListener('dragleave', (e) => {
+      const target = e.target.closest('.rule-card');
+      if (target) {
+        target.style.borderTop = '';
+      }
+    });
+
+    list.addEventListener('drop', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const target = e.target.closest('.rule-card');
+      if (dragSrcEl && target && dragSrcEl !== target) {
+        target.style.borderTop = '';
+        
+        const allItems = Array.from(list.querySelectorAll('.rule-card'));
+        const srcIndex = allItems.indexOf(dragSrcEl);
+        const targetIndex = allItems.indexOf(target);
+
+        const [movedRule] = activeDomainData.htmlRules.splice(srcIndex, 1);
+        activeDomainData.htmlRules.splice(targetIndex, 0, movedRule);
+
+        chrome.storage.local.get(['siteTweaks'], (result) => {
+          const allTweaks = result.siteTweaks || {};
+          allTweaks[storageKey] = {
+            ...allTweaks[storageKey],
+            htmlRules: activeDomainData.htmlRules
+          };
+          chrome.storage.local.set({ siteTweaks: allTweaks }, () => {
+            renderHTMLRulesList();
+            showStatus('Порядок правил изменен', 'online');
+            if (activeTab) {
+              chrome.tabs.sendMessage(activeTab.id, { action: 'RELOAD_STORAGE' }).catch(() => {});
+            }
+          });
+        });
+      }
+      return false;
+    });
+
+    list.addEventListener('dragend', (e) => {
+      const items = list.querySelectorAll('.rule-card');
+      items.forEach(item => {
+        item.style.opacity = '1';
+        item.style.borderTop = '';
+      });
+    });
   }
 
   // HTML escaping helper

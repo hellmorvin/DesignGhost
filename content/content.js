@@ -49,6 +49,8 @@
   let mutationObserver = null;
   let copiedStyles = null;
   let mutationTimeout = null;
+  let liveSyncInterval = null;
+  let colorHistory = [];
 
   // Image compression and resize helper (downscale to max 1200px and compress to 0.8 JPEG quality)
   function compressAndResizeImage(file, maxDimension = 1200, quality = 0.8) {
@@ -94,6 +96,7 @@
 
   function init() {
     createStyleTag();
+    injectGoogleFonts();
     loadAndApplyTweaks();
     setupMessageListeners();
     setupMutationObserver();
@@ -195,20 +198,26 @@
     // currentDomainTweaks represents the settings of the ACTIVE scope (either page or domain)
     currentDomainTweaks = (activeScope === 'page') ? pageData : domainData;
 
-    if (globalEnabled) {
+    handleLiveSyncWatcher(pageData.liveSyncUrl || domainData.liveSyncUrl);
+
+    // Unified enabled check: if EITHER domain or page scope has enabled=false, disable everything.
+    // This ensures the popup toggle (which sets both) is always respected after page reload.
+    const domainEnabled = domainData.enabled !== false;
+    const pageEnabled = pageData.enabled !== false;
+    const siteEnabled = domainEnabled && pageEnabled;
+
+    if (globalEnabled && siteEnabled) {
       let mergedCss = '';
       let mergedHtmlRules = [];
       let mergedHtml = '';
       let mergedJs = '';
 
-      if (domainData.enabled !== false) {
-        mergedCss += (domainData.css || '');
-        mergedHtmlRules = mergedHtmlRules.concat(domainData.htmlRules || []);
-        mergedHtml += (domainData.html || '');
-        mergedJs += (domainData.js || '');
-      }
+      mergedCss += (domainData.css || '');
+      mergedHtmlRules = mergedHtmlRules.concat(domainData.htmlRules || []);
+      mergedHtml += (domainData.html || '');
+      mergedJs += (domainData.js || '');
 
-      if (activeScope === 'page' && pageData.enabled !== false) {
+      if (activeScope === 'page') {
         mergedCss += '\n' + (pageData.css || '');
         const pageRules = pageData.htmlRules || [];
         pageRules.forEach(pRule => {
@@ -237,6 +246,7 @@
       applyCustomHTML('');
       applyCustomJS('');
     }
+
 
     updateBadgeCount();
   }
@@ -434,6 +444,36 @@
         message.action === 'APPLY_HTML_RULES') {
         loadAndApplyTweaks(true);
         sendResponse({ success: true });
+      }
+      if (message.action === 'START_LIVE_SYNC') {
+        handleLiveSyncWatcher(message.url);
+        sendResponse({ success: true });
+      }
+
+      if (message.action === 'STOP_LIVE_SYNC') {
+        handleLiveSyncWatcher(null);
+        sendResponse({ success: true });
+      }
+      if (message.action === 'EDIT_RULE_IN_INSPECTOR') {
+        try {
+          const el = document.querySelector(message.selector);
+          if (el) {
+            if (!isInspectMode) {
+              toggleInspectorMode(true);
+            }
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setTimeout(() => {
+              openInspectorModal(el, message.selector);
+              flashGreenElement(el);
+            }, 300);
+            sendResponse({ success: true });
+          } else {
+            sendResponse({ success: false });
+          }
+        } catch (e) {
+          sendResponse({ success: false });
+        }
+        return true;
       }
 
       if (message.action === 'TOGGLE_INSPECTOR') {
@@ -754,7 +794,7 @@
   }
 
   // Open Inspector Dialog Modal
-  function openInspectorModal(el) {
+  function openInspectorModal(el, forceSelector = null) {
     if (inspectorModal) {
       inspectorModal.remove();
     }
@@ -763,6 +803,11 @@
     const defaultSelector = getUniqueCSSSelector(el);
     if (!selectorOptions.includes(defaultSelector)) {
       selectorOptions.push(defaultSelector);
+    }
+    if (forceSelector) {
+      const idx = selectorOptions.indexOf(forceSelector);
+      if (idx !== -1) selectorOptions.splice(idx, 1);
+      selectorOptions.unshift(forceSelector);
     }
     const selector = selectorOptions[0] || defaultSelector;
 
@@ -825,152 +870,223 @@
 
         <!-- TAB 1: VISUAL CSS STYLES -->
         <div class="stp-tab-content active" id="stp-tab-content-style">
-          <div class="stp-style-grid">
-            <div class="stp-style-col">
-              <label class="stp-label">Цвет текста</label>
-              <div class="stp-color-input-wrapper">
-                <input type="color" id="stp-color-text" class="stp-color-input">
-                <input type="text" id="stp-color-text-hex" class="stp-text-input-mini" placeholder="Auto">
-                <button class="stp-eyedropper-btn" id="stp-btn-eyedropper-text" title="Выбрать цвет с экрана">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                    <path d="m2 22 1-1c.6.6 1.4.6 2 0l7-7-2-2-7 7c-.6.6-.6 1.4 0 2l-1 1Zm11-11 7-7c.6-.6.6-1.4 0-2l-2-2c-.6-.6-1.4-.6-2 0l-7 7 4 4Z"/>
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div class="stp-style-col">
-              <label class="stp-label">Цвет фона</label>
-              <div class="stp-color-input-wrapper">
-                <input type="color" id="stp-color-bg" class="stp-color-input">
-                <input type="text" id="stp-color-bg-hex" class="stp-text-input-mini" placeholder="Auto">
-                <button class="stp-eyedropper-btn" id="stp-btn-eyedropper-bg" title="Выбрать цвет с экрана">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                    <path d="m2 22 1-1c.6.6 1.4.6 2 0l7-7-2-2-7 7c-.6.6-.6 1.4 0 2l-1 1Zm11-11 7-7c.6-.6.6-1.4 0-2l-2-2c-.6-.6-1.4-.6-2 0l-7 7 4 4Z"/>
-                  </svg>
-                </button>
-              </div>
-            </div>
+          <div class="stp-subtabs" style="display:flex; gap:4px; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 6px;">
+            <button class="stp-btn stp-btn-secondary stp-btn-xs active" id="stp-sub-tab-text" style="flex:1;">Шрифт</button>
+            <button class="stp-btn stp-btn-secondary stp-btn-xs" id="stp-sub-tab-bg" style="flex:1;">Фон и Тень</button>
+            <button class="stp-btn stp-btn-secondary stp-btn-xs" id="stp-sub-tab-layout" style="flex:1;">Макет</button>
           </div>
 
-          <div class="stp-slider-group">
-            <div class="stp-slider-header">
-              <span class="stp-label">Размер шрифта</span>
-              <span class="stp-range-val" id="stp-font-size-val">Auto</span>
-            </div>
-            <input type="range" id="stp-font-size" min="8" max="72" value="16" class="stp-range-slider">
-          </div>
-
-          <div class="stp-slider-group">
-            <div class="stp-slider-header">
-              <span class="stp-label">Скругление углов</span>
-              <span class="stp-range-val" id="stp-border-radius-val">Auto</span>
-            </div>
-            <input type="range" id="stp-border-radius" min="0" max="60" value="0" class="stp-range-slider">
-          </div>
-
-          <div class="stp-slider-group">
-            <div class="stp-slider-header">
-              <span class="stp-label">Прозрачность</span>
-              <span class="stp-range-val" id="stp-opacity-val">100%</span>
-            </div>
-            <input type="range" id="stp-opacity" min="0" max="100" value="100" class="stp-range-slider">
-          </div>
-
-          <div class="stp-style-grid">
-            <div class="stp-style-col">
-              <label class="stp-label">Внутренний отступ (Padding, px)</label>
-              <input type="number" id="stp-padding" class="stp-num-input" placeholder="Auto" min="0">
-            </div>
-            <div class="stp-style-col">
-              <label class="stp-label">Внешний отступ (Margin, px)</label>
-              <input type="number" id="stp-margin" class="stp-num-input" placeholder="Auto" min="0">
-            </div>
-          </div>
-
-          <!-- IMAGE REPLACEMENT (IMG TAG ONLY) -->
-          ${isImgTag ? `
-          <div class="stp-style-grid" style="margin-top: 6px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 10px;">
-            <div class="stp-style-col" style="grid-column: span 2;">
-              <label class="stp-label">Замена картинки (src)</label>
-              <div class="stp-file-input-wrapper" style="display: flex; gap: 8px;">
-                <button class="stp-btn stp-btn-secondary stp-btn-sm" id="stp-btn-upload-img-src" style="flex: 1;">Выбрать фото</button>
-                <input type="file" id="stp-upload-img-src" accept="image/*" style="display:none;">
-                <button class="stp-btn stp-btn-danger" id="stp-btn-revert-img-src" style="display: none; padding: 0 10px;" title="Сбросить картинку">&times;</button>
-              </div>
-            </div>
-          </div>
-          <div id="stp-img-options" style="display: none; margin-top: 8px; gap: 8px; flex-direction: column;">
+          <!-- TEXT / TYPOGRAPHY SUB-TAB -->
+          <div id="stp-sub-content-text" style="display:block;">
             <div class="stp-style-grid">
               <div class="stp-style-col">
-                <label class="stp-label">Размер фото</label>
-                <select id="stp-img-fit" class="stp-select">
-                  <option value="fill">Растянуть (fill)</option>
-                  <option value="cover">Заполнить (cover)</option>
-                  <option value="contain">Вписать (contain)</option>
-                  <option value="none">Исходный (none)</option>
-                </select>
+                <label class="stp-label">Цвет текста</label>
+                <div class="stp-color-input-wrapper">
+                  <input type="color" id="stp-color-text" class="stp-color-input">
+                  <input type="text" id="stp-color-text-hex" class="stp-text-input-mini" placeholder="Auto">
+                  <button class="stp-eyedropper-btn" id="stp-btn-eyedropper-text" title="Выбрать цвет с экрана">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m2 22 1-1c.6.6 1.4.6 2 0l7-7-2-2-7 7c-.6.6-.6 1.4 0 2l-1 1Zm11-11 7-7c.6-.6.6-1.4 0-2l-2-2c-.6-.6-1.4-.6-2 0l-7 7 4 4Z"/></svg>
+                  </button>
+                </div>
               </div>
               <div class="stp-style-col">
-                <label class="stp-label">Положение фото</label>
-                <select id="stp-img-position" class="stp-select">
-                  <option value="center">Центр</option>
-                  <option value="top">Сверху</option>
-                  <option value="bottom">Снизу</option>
-                  <option value="left">Слева</option>
-                  <option value="right">Справа</option>
+                <label class="stp-label">Шрифт (Google Fonts)</label>
+                <select id="stp-font-family" class="stp-select">
+                  <option value="">По умолчанию (System Default)</option>
+                  <option value="'Inter', sans-serif">Inter</option>
+                  <option value="'Montserrat', sans-serif">Montserrat</option>
+                  <option value="'Roboto', sans-serif">Roboto</option>
+                  <option value="'Open Sans', sans-serif">Open Sans</option>
+                  <option value="'Playfair Display', serif">Playfair Display</option>
+                  <option value="'Oswald', sans-serif">Oswald</option>
+                  <option value="'Lora', serif">Lora</option>
+                  <option value="'Nunito', sans-serif">Nunito</option>
+                  <option value="'Poppins', sans-serif">Poppins</option>
+                  <option value="monospace">Monospace (Код)</option>
                 </select>
               </div>
             </div>
-          </div>
-          ` : ''}
 
-          <!-- BACKGROUND IMAGE UPLOADER -->
-          <div class="stp-style-grid" style="margin-top: 6px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 10px;">
-            <div class="stp-style-col" style="grid-column: span 2;">
+            <div class="stp-slider-group" style="margin-top: 6px;">
+              <div class="stp-slider-header">
+                <span class="stp-label">Размер шрифта</span>
+                <span class="stp-range-val" id="stp-font-size-val">Auto</span>
+              </div>
+              <input type="range" id="stp-font-size" min="8" max="72" value="16" class="stp-range-slider">
+            </div>
+
+            <div class="stp-style-grid" style="margin-top: 6px;">
+              <div class="stp-style-col">
+                <label class="stp-label">Насыщенность (Weight)</label>
+                <select id="stp-font-weight" class="stp-select">
+                  <option value="">Auto</option>
+                  <option value="300">Light (300)</option>
+                  <option value="400">Regular (400)</option>
+                  <option value="500">Medium (500)</option>
+                  <option value="600">SemiBold (600)</option>
+                  <option value="700">Bold (700)</option>
+                </select>
+              </div>
+              <div class="stp-style-col">
+                <label class="stp-label">Высота строки (Line)</label>
+                <input type="number" id="stp-line-height" class="stp-num-input" placeholder="Auto" step="0.1" min="0.5" max="3">
+              </div>
+            </div>
+
+            <div class="stp-slider-group" style="margin-top: 6px;">
+              <div class="stp-slider-header">
+                <span class="stp-label">Интервал букв (Letter Spacing, px)</span>
+                <span class="stp-range-val" id="stp-letter-spacing-val">Auto</span>
+              </div>
+              <input type="range" id="stp-letter-spacing" min="-5" max="15" value="0" step="0.5" class="stp-range-slider">
+            </div>
+            
+            <div style="margin-top: 10px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 8px;">
+              <label class="stp-label">Тень текста (Text Shadow)</label>
+              <div class="stp-style-grid" style="margin-top: 4px;">
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">X</label>
+                  <input type="range" id="stp-ts-x" min="-20" max="20" value="0" class="stp-range-slider">
+                </div>
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">Y</label>
+                  <input type="range" id="stp-ts-y" min="-20" max="20" value="0" class="stp-range-slider">
+                </div>
+              </div>
+              <div class="stp-style-grid" style="margin-top: 4px;">
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">Размытие (Blur)</label>
+                  <input type="range" id="stp-ts-blur" min="0" max="40" value="0" class="stp-range-slider">
+                </div>
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">Цвет</label>
+                  <input type="color" id="stp-ts-color" class="stp-color-input" style="width: 100%;" value="#000000">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- BACKGROUND & SHADOWS SUB-TAB -->
+          <div id="stp-sub-content-bg" style="display:none;">
+            <div class="stp-style-grid">
+              <div class="stp-style-col">
+                <label class="stp-label">Цвет фона</label>
+                <div class="stp-color-input-wrapper">
+                  <input type="color" id="stp-color-bg" class="stp-color-input">
+                  <input type="text" id="stp-color-bg-hex" class="stp-text-input-mini" placeholder="Auto">
+                  <button class="stp-eyedropper-btn" id="stp-btn-eyedropper-bg" title="Выбрать цвет с экрана">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m2 22 1-1c.6.6 1.4.6 2 0l7-7-2-2-7 7c-.6.6-.6 1.4 0 2l-1 1Zm11-11 7-7c.6-.6.6-1.4 0-2l-2-2c-.6-.6-1.4-.6-2 0l-7 7 4 4Z"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="stp-style-col">
+                <label class="stp-label">Скругление углов</label>
+                <input type="range" id="stp-border-radius" min="0" max="100" value="0" class="stp-range-slider" style="margin-top:6px;">
+              </div>
+            </div>
+
+            <!-- COLOR HISTORY -->
+            <div style="margin-top: 6px;">
+              <div id="stp-color-history-container" style="display: flex; gap: 8px; flex-wrap: wrap; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 8px; min-height: 28px;"></div>
+            </div>
+
+            <div class="stp-slider-group" style="margin-top: 6px;">
+              <div class="stp-slider-header">
+                <span class="stp-label">Прозрачность элемента (Opacity)</span>
+                <span class="stp-range-val" id="stp-opacity-val">100%</span>
+              </div>
+              <input type="range" id="stp-opacity" min="0" max="100" value="100" class="stp-range-slider">
+            </div>
+
+            <!-- GRADIENTS -->
+            <div style="margin-top: 10px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 8px;">
+              <label class="stp-label">Линейный Градиент (Linear Gradient)</label>
+              <div class="stp-style-grid" style="margin-top: 4px;">
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">Цвет 1 (Начало)</label>
+                  <input type="color" id="stp-grad-color1" class="stp-color-input" style="width:100%;" value="#ffffff">
+                </div>
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">Цвет 2 (Конец)</label>
+                  <input type="color" id="stp-grad-color2" class="stp-color-input" style="width:100%;" value="#000000">
+                </div>
+              </div>
+              <div class="stp-slider-group" style="margin-top: 4px;">
+                <div class="stp-slider-header">
+                  <span class="stp-label" style="font-size: 9px; opacity: 0.7;">Угол наклона (Angle)</span>
+                  <span class="stp-range-val" id="stp-grad-angle-val">90°</span>
+                </div>
+                <input type="range" id="stp-grad-angle" min="0" max="360" value="90" class="stp-range-slider">
+              </div>
+              <button class="stp-btn stp-btn-secondary stp-btn-xs" id="stp-btn-apply-grad" style="margin-top: 4px; width: 100%;">Применить градиент</button>
+              <button class="stp-btn stp-btn-secondary stp-btn-xs" id="stp-btn-remove-grad" style="margin-top: 4px; width: 100%; display:none;">Удалить градиент</button>
+            </div>
+
+            <!-- BOX SHADOW -->
+            <div style="margin-top: 10px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 8px;">
+              <label class="stp-label">Тень элемента (Box Shadow)</label>
+              <div class="stp-style-grid" style="margin-top: 4px;">
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">X</label>
+                  <input type="range" id="stp-bs-x" min="-50" max="50" value="0" class="stp-range-slider">
+                </div>
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">Y</label>
+                  <input type="range" id="stp-bs-y" min="-50" max="50" value="0" class="stp-range-slider">
+                </div>
+              </div>
+              <div class="stp-style-grid" style="margin-top: 4px;">
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">Размытие (Blur)</label>
+                  <input type="range" id="stp-bs-blur" min="0" max="100" value="0" class="stp-range-slider">
+                </div>
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">Размах (Spread)</label>
+                  <input type="range" id="stp-bs-spread" min="-50" max="50" value="0" class="stp-range-slider">
+                </div>
+              </div>
+              <div class="stp-style-grid" style="margin-top: 4px;">
+                <div class="stp-style-col">
+                  <label class="stp-label" style="font-size: 9px; opacity: 0.7;">Цвет</label>
+                  <input type="color" id="stp-bs-color" class="stp-color-input" style="width: 100%;" value="#000000">
+                </div>
+                <div class="stp-style-col" style="display:flex; align-items:center;">
+                  <label class="stp-label" style="margin:0; cursor:pointer; font-size: 10px;">
+                    <input type="checkbox" id="stp-bs-inset" style="margin-right:4px;"> Внутренняя (Inset)
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- BG IMAGE (From old design) -->
+            <div style="margin-top: 10px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 8px;">
               <label class="stp-label">Фоновое изображение</label>
-              <div class="stp-file-input-wrapper" style="display: flex; gap: 8px;">
-                <button class="stp-btn stp-btn-secondary stp-btn-sm" id="stp-btn-upload-bg-img" style="flex: 1;">Загрузить фон</button>
+              <div class="stp-file-input-wrapper" style="display: flex; gap: 8px; margin-top: 4px;">
+                <button class="stp-btn stp-btn-secondary stp-btn-sm" id="stp-btn-upload-bg-img" style="flex: 1;">Выбрать фото</button>
                 <input type="file" id="stp-upload-bg-img" accept="image/*" style="display:none;">
                 <button class="stp-btn stp-btn-danger" id="stp-btn-clear-bg-img" style="display: none; padding: 0 10px;" title="Удалить фон">&times;</button>
               </div>
-            </div>
-          </div>
-          <!-- BACKGROUND OPTIONS -->
-          <div id="stp-bg-options" style="display: none; margin-top: 8px; gap: 8px; flex-direction: column;">
-            <div class="stp-style-grid">
-              <div class="stp-style-col">
-                <label class="stp-label">Размер фона</label>
-                <select id="stp-bg-size" class="stp-select">
-                  <option value="cover">Заполнить (cover)</option>
-                  <option value="contain">Вписать (contain)</option>
-                  <option value="auto">Авто (auto)</option>
-                </select>
-              </div>
-              <div class="stp-style-col">
-                <label class="stp-label">Позиция фона</label>
-                <select id="stp-bg-position" class="stp-select">
-                  <option value="center">Центр</option>
-                  <option value="top">Сверху</option>
-                  <option value="bottom">Снизу</option>
-                  <option value="left">Слева</option>
-                  <option value="right">Справа</option>
-                  <option value="custom">Вручную (px)</option>
-                </select>
-              </div>
-            </div>
-            <div id="stp-bg-custom-position" class="stp-style-grid" style="display: none; margin-top: 4px;">
-              <div class="stp-style-col">
-                <label class="stp-label">Смещение X (px)</label>
-                <input type="number" id="stp-bg-pos-x" class="stp-num-input" placeholder="0">
-              </div>
-              <div class="stp-style-col">
-                <label class="stp-label">Смещение Y (px)</label>
-                <input type="number" id="stp-bg-pos-y" class="stp-num-input" placeholder="0">
-              </div>
-            </div>
-            <div class="stp-style-grid" style="margin-top: 4px;">
-              <div class="stp-style-col" style="grid-column: span 2;">
-                <label class="stp-label">Повторение фона</label>
+              <div id="stp-bg-options" style="display: none; margin-top: 8px; gap: 8px; flex-direction: column;">
+                <div class="stp-style-grid">
+                  <div class="stp-style-col">
+                    <label class="stp-label">Размер</label>
+                    <select id="stp-bg-size" class="stp-select">
+                      <option value="cover">Cover</option>
+                      <option value="contain">Contain</option>
+                      <option value="auto">Auto</option>
+                    </select>
+                  </div>
+                  <div class="stp-style-col">
+                    <label class="stp-label">Позиция</label>
+                    <select id="stp-bg-position" class="stp-select">
+                      <option value="center">Center</option>
+                      <option value="top">Top</option>
+                      <option value="bottom">Bottom</option>
+                      <option value="left">Left</option>
+                      <option value="right">Right</option>
+                    </select>
+                  </div>
+                </div>
                 <select id="stp-bg-repeat" class="stp-select">
                   <option value="no-repeat">Не повторять</option>
                   <option value="repeat">Повторять</option>
@@ -979,13 +1095,115 @@
             </div>
           </div>
 
-          <div class="stp-actions" style="margin-top: 8px;">
-            <button class="stp-btn stp-btn-primary" id="stp-save-styles">
-              Сохранить стили
-            </button>
-            <button class="stp-btn stp-btn-warning" id="stp-reset-element-styles">
-              Сбросить стили
-            </button>
+          <!-- LAYOUT SUB-TAB -->
+          <div id="stp-sub-content-layout" style="display:none;">
+            <div class="stp-style-grid">
+              <div class="stp-style-col">
+                <label class="stp-label">Внутр. отступ (Padding, px)</label>
+                <input type="number" id="stp-padding" class="stp-num-input" placeholder="Auto" min="0">
+              </div>
+              <div class="stp-style-col">
+                <label class="stp-label">Внешн. отступ (Margin, px)</label>
+                <input type="number" id="stp-margin" class="stp-num-input" placeholder="Auto" min="0">
+              </div>
+            </div>
+
+            <div style="margin-top: 10px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 10px;">
+              <span class="stp-label" style="text-align: left; margin-bottom: 6px; font-weight: bold; color: #a855f7;">Структура (Flexbox / Grid)</span>
+              <div class="stp-style-grid">
+                <div class="stp-style-col">
+                  <label class="stp-label">Режим (Display)</label>
+                  <select id="stp-layout-display" class="stp-select">
+                    <option value="">По умолчанию</option>
+                    <option value="flex">Flexbox (flex)</option>
+                    <option value="grid">Grid (grid)</option>
+                    <option value="block">Block</option>
+                    <option value="inline-block">Inline-block</option>
+                  </select>
+                </div>
+                <div class="stp-style-col">
+                  <label class="stp-label">Направление (Dir)</label>
+                  <select id="stp-layout-direction" class="stp-select">
+                    <option value="">По умолчанию</option>
+                    <option value="row">Строка (row)</option>
+                    <option value="column">Колонка (column)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="stp-style-grid" style="margin-top: 6px;">
+                <div class="stp-style-col">
+                  <label class="stp-label">Горизонталь (Justify)</label>
+                  <select id="stp-layout-justify" class="stp-select">
+                    <option value="">По умолчанию</option>
+                    <option value="flex-start">Start</option>
+                    <option value="center">Center</option>
+                    <option value="flex-end">End</option>
+                    <option value="space-between">Space-between</option>
+                    <option value="space-around">Space-around</option>
+                  </select>
+                </div>
+                <div class="stp-style-col">
+                  <label class="stp-label">Вертикаль (Align)</label>
+                  <select id="stp-layout-align" class="stp-select">
+                    <option value="">По умолчанию</option>
+                    <option value="stretch">Stretch</option>
+                    <option value="center">Center</option>
+                    <option value="flex-start">Start</option>
+                    <option value="flex-end">End</option>
+                  </select>
+                </div>
+              </div>
+              <div class="stp-style-grid" style="margin-top: 6px;">
+                <div class="stp-style-col">
+                  <label class="stp-label">Промежуток (Gap, px)</label>
+                  <input type="number" id="stp-layout-gap" class="stp-num-input" placeholder="По умолчанию" min="0">
+                </div>
+                <div class="stp-style-col">
+                  <label class="stp-label">Перенос (Wrap)</label>
+                  <select id="stp-layout-wrap" class="stp-select">
+                    <option value="">По умолчанию</option>
+                    <option value="nowrap">No Wrap</option>
+                    <option value="wrap">Wrap</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- IMAGE REPLACEMENT -->
+            ${isImgTag ? `
+            <div style="margin-top: 10px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 10px;">
+              <label class="stp-label">Замена картинки (src)</label>
+              <div class="stp-file-input-wrapper" style="display: flex; gap: 8px;">
+                <button class="stp-btn stp-btn-secondary stp-btn-sm" id="stp-btn-upload-img-src" style="flex: 1;">Выбрать фото</button>
+                <input type="file" id="stp-upload-img-src" accept="image/*" style="display:none;">
+                <button class="stp-btn stp-btn-danger" id="stp-btn-revert-img-src" style="display: none; padding: 0 10px;" title="Сбросить картинку">&times;</button>
+              </div>
+              <div id="stp-img-options" style="display: none; margin-top: 8px; gap: 8px; flex-direction: column;">
+                <div class="stp-style-grid">
+                  <div class="stp-style-col">
+                    <label class="stp-label">Размер фото</label>
+                    <select id="stp-img-fit" class="stp-select">
+                      <option value="fill">Растянуть (fill)</option>
+                      <option value="contain">Вписать (contain)</option>
+                      <option value="cover">Заполнить (cover)</option>
+                    </select>
+                  </div>
+                  <div class="stp-style-col">
+                    <label class="stp-label">Позиция</label>
+                    <select id="stp-img-position" class="stp-select">
+                      <option value="center">Центр</option>
+                      <option value="top">Сверху</option>
+                      <option value="bottom">Снизу</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>` : ''}
+          </div>
+
+          <div class="stp-actions" style="margin-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px;">
+            <button class="stp-btn stp-btn-primary" id="stp-save-styles">Сохранить стили</button>
+            <button class="stp-btn stp-btn-warning" id="stp-reset-element-styles">Сбросить стили</button>
           </div>
         </div>
 
@@ -1092,48 +1310,219 @@
       tabHtmlContent.classList.remove('active');
     };
 
+    // Sub-tab switching logic
+    const subTabTextBtn = document.getElementById('stp-sub-tab-text');
+    const subTabBgBtn = document.getElementById('stp-sub-tab-bg');
+    const subTabLayoutBtn = document.getElementById('stp-sub-tab-layout');
+
+    const subContentText = document.getElementById('stp-sub-content-text');
+    const subContentBg = document.getElementById('stp-sub-content-bg');
+    const subContentLayout = document.getElementById('stp-sub-content-layout');
+
+    function resetSubTabs() {
+      if (subTabTextBtn) subTabTextBtn.classList.remove('active');
+      if (subTabBgBtn) subTabBgBtn.classList.remove('active');
+      if (subTabLayoutBtn) subTabLayoutBtn.classList.remove('active');
+      if (subContentText) subContentText.style.display = 'none';
+      if (subContentBg) subContentBg.style.display = 'none';
+      if (subContentLayout) subContentLayout.style.display = 'none';
+    }
+
+    if (subTabTextBtn) {
+      subTabTextBtn.onclick = () => {
+        resetSubTabs();
+        subTabTextBtn.classList.add('active');
+        subContentText.style.display = 'block';
+      };
+    }
+    if (subTabBgBtn) {
+      subTabBgBtn.onclick = () => {
+        resetSubTabs();
+        subTabBgBtn.classList.add('active');
+        subContentBg.style.display = 'block';
+      };
+    }
+    if (subTabLayoutBtn) {
+      subTabLayoutBtn.onclick = () => {
+        resetSubTabs();
+        subTabLayoutBtn.classList.add('active');
+        subContentLayout.style.display = 'block';
+      };
+    }
+
+
     // Pre-populate visually with computed values
     const computed = window.getComputedStyle(el);
     const textColHex = rgbToHex(computed.color);
-    const bgColHex = rgbToHex(computed.backgroundColor);
+    
+    // Background prep
+    let bgColHex = '#000000';
+    let gradCol1 = '#ffffff';
+    let gradCol2 = '#000000';
+    let gradAngle = 90;
+    const bgStr = computed.background || computed.backgroundImage || '';
+    if (bgStr.includes('linear-gradient')) {
+      // Basic gradient extraction for UI (fallback to default if complex)
+      const match = bgStr.match(/linear-gradient\((\d+)deg,\s*(rgb\([^)]+\)|#[a-f0-9]+)\s*\d*%?,\s*(rgb\([^)]+\)|#[a-f0-9]+)/i);
+      if (match) {
+        gradAngle = parseInt(match[1]);
+        gradCol1 = match[2].includes('rgb') ? rgbToHex(match[2]) : match[2];
+        gradCol2 = match[3].includes('rgb') ? rgbToHex(match[3]) : match[3];
+      }
+      const bgMatch = computed.backgroundColor;
+      bgColHex = (bgMatch && bgMatch !== 'rgba(0, 0, 0, 0)') ? rgbToHex(bgMatch) : '#000000';
+    } else {
+      bgColHex = rgbToHex(computed.backgroundColor);
+    }
 
+    // Shadow prep (Box Shadow)
+    let bsX = 0, bsY = 0, bsBlur = 0, bsSpread = 0, bsColor = '#000000', bsInset = false;
+    if (computed.boxShadow && computed.boxShadow !== 'none') {
+      const parts = computed.boxShadow.split(/ (?![^(]*\))/);
+      const inset = parts.includes('inset');
+      bsInset = inset;
+      const rgbMatch = computed.boxShadow.match(/rgb[a]?\([^)]+\)/);
+      if (rgbMatch) bsColor = rgbToHex(rgbMatch[0]);
+      const pxVals = computed.boxShadow.match(/-?\d+px/g);
+      if (pxVals && pxVals.length >= 3) {
+        bsX = parseInt(pxVals[0]);
+        bsY = parseInt(pxVals[1]);
+        bsBlur = parseInt(pxVals[2]);
+        if (pxVals[3]) bsSpread = parseInt(pxVals[3]);
+      }
+    }
+
+    // Shadow prep (Text Shadow)
+    let tsX = 0, tsY = 0, tsBlur = 0, tsColor = '#000000';
+    if (computed.textShadow && computed.textShadow !== 'none') {
+      const rgbMatch = computed.textShadow.match(/rgb[a]?\([^)]+\)/);
+      if (rgbMatch) tsColor = rgbToHex(rgbMatch[0]);
+      const pxVals = computed.textShadow.match(/-?\d+px/g);
+      if (pxVals && pxVals.length >= 3) {
+        tsX = parseInt(pxVals[0]);
+        tsY = parseInt(pxVals[1]);
+        tsBlur = parseInt(pxVals[2]);
+      }
+    }
+
+    // Typography elements
     const colorText = document.getElementById('stp-color-text');
     const colorTextHex = document.getElementById('stp-color-text-hex');
-    const colorBg = document.getElementById('stp-color-bg');
-    const colorBgHex = document.getElementById('stp-color-bg-hex');
+    const fontSelect = document.getElementById('stp-font-family');
     const fontSize = document.getElementById('stp-font-size');
     const fontSizeVal = document.getElementById('stp-font-size-val');
+    const fontWeightSelect = document.getElementById('stp-font-weight');
+    const lineHeightInput = document.getElementById('stp-line-height');
+    const letterSpacing = document.getElementById('stp-letter-spacing');
+    const letterSpacingVal = document.getElementById('stp-letter-spacing-val');
+    
+    // Text Shadow elements
+    const tsXInput = document.getElementById('stp-ts-x');
+    const tsYInput = document.getElementById('stp-ts-y');
+    const tsBlurInput = document.getElementById('stp-ts-blur');
+    const tsColorInput = document.getElementById('stp-ts-color');
+
+    // Background elements
+    const colorBg = document.getElementById('stp-color-bg');
+    const colorBgHex = document.getElementById('stp-color-bg-hex');
     const borderRadius = document.getElementById('stp-border-radius');
-    const borderRadiusVal = document.getElementById('stp-border-radius-val');
     const opacity = document.getElementById('stp-opacity');
     const opacityVal = document.getElementById('stp-opacity-val');
+    
+    // Gradient elements
+    const gradCol1Input = document.getElementById('stp-grad-color1');
+    const gradCol2Input = document.getElementById('stp-grad-color2');
+    const gradAngleInput = document.getElementById('stp-grad-angle');
+    const gradAngleVal = document.getElementById('stp-grad-angle-val');
+    const btnApplyGrad = document.getElementById('stp-btn-apply-grad');
+    const btnRemoveGrad = document.getElementById('stp-btn-remove-grad');
+
+    // Box Shadow elements
+    const bsXInput = document.getElementById('stp-bs-x');
+    const bsYInput = document.getElementById('stp-bs-y');
+    const bsBlurInput = document.getElementById('stp-bs-blur');
+    const bsSpreadInput = document.getElementById('stp-bs-spread');
+    const bsColorInput = document.getElementById('stp-bs-color');
+    const bsInsetInput = document.getElementById('stp-bs-inset');
+
+    // Layout elements
     const paddingInput = document.getElementById('stp-padding');
     const marginInput = document.getElementById('stp-margin');
+    const displaySelect = document.getElementById('stp-layout-display');
+    const directionSelect = document.getElementById('stp-layout-direction');
+    const justifySelect = document.getElementById('stp-layout-justify');
+    const alignSelect = document.getElementById('stp-layout-align');
+    const gapInput = document.getElementById('stp-layout-gap');
+    const wrapSelect = document.getElementById('stp-layout-wrap');
 
     // Image/Background controls
     const uploadBgImg = document.getElementById('stp-upload-bg-img');
     const btnUploadBgImg = document.getElementById('stp-btn-upload-bg-img');
     const btnClearBgImg = document.getElementById('stp-btn-clear-bg-img');
 
+    // Init Typography UI
     colorText.value = textColHex;
     colorTextHex.value = textColHex;
-    colorBg.value = bgColHex;
-    colorBgHex.value = bgColHex;
-
     const currentFSize = parseFloat(computed.fontSize);
     fontSize.value = currentFSize;
     fontSizeVal.textContent = currentFSize + 'px';
+    if (fontSelect) fontSelect.value = el.style.fontFamily || '';
+    if (fontWeightSelect) fontWeightSelect.value = el.style.fontWeight || '';
+    if (lineHeightInput) {
+      if (computed.lineHeight && computed.lineHeight !== 'normal') {
+        const lh = parseFloat(computed.lineHeight) / parseFloat(computed.fontSize);
+        lineHeightInput.value = lh ? lh.toFixed(1) : '';
+      }
+    }
+    const currentLs = parseFloat(computed.letterSpacing) || 0;
+    if (letterSpacing) letterSpacing.value = currentLs;
+    if (letterSpacingVal) letterSpacingVal.textContent = currentLs + 'px';
+    
+    // Init Text Shadow UI
+    if (tsXInput) tsXInput.value = tsX;
+    if (tsYInput) tsYInput.value = tsY;
+    if (tsBlurInput) tsBlurInput.value = tsBlur;
+    if (tsColorInput) tsColorInput.value = tsColor;
 
+    // Init BG UI
+    colorBg.value = bgColHex;
+    colorBgHex.value = bgColHex;
     const currentBRad = parseFloat(computed.borderRadius) || 0;
     borderRadius.value = currentBRad;
-    borderRadiusVal.textContent = currentBRad + 'px';
-
     const currentOp = Math.round(parseFloat(computed.opacity) * 100) || 100;
     opacity.value = currentOp;
     opacityVal.textContent = currentOp + '%';
 
+    // Init Gradient UI
+    if (gradCol1Input) gradCol1Input.value = gradCol1;
+    if (gradCol2Input) gradCol2Input.value = gradCol2;
+    if (gradAngleInput) {
+      gradAngleInput.value = gradAngle;
+      gradAngleVal.textContent = gradAngle + '°';
+    }
+    if (el.style.backgroundImage && el.style.backgroundImage.includes('linear-gradient')) {
+      if (btnRemoveGrad) btnRemoveGrad.style.display = 'block';
+    }
+
+    // Init Box Shadow UI
+    if (bsXInput) bsXInput.value = bsX;
+    if (bsYInput) bsYInput.value = bsY;
+    if (bsBlurInput) bsBlurInput.value = bsBlur;
+    if (bsSpreadInput) bsSpreadInput.value = bsSpread;
+    if (bsColorInput) bsColorInput.value = bsColor;
+    if (bsInsetInput) bsInsetInput.checked = bsInset;
+
+    // Init Layout UI
     paddingInput.value = parseInt(computed.paddingTop) || '';
     marginInput.value = parseInt(computed.marginTop) || '';
+    if (displaySelect) displaySelect.value = el.style.display || '';
+    if (directionSelect) directionSelect.value = el.style.flexDirection || '';
+    if (justifySelect) justifySelect.value = el.style.justifyContent || '';
+    if (alignSelect) alignSelect.value = el.style.alignItems || '';
+    if (gapInput) gapInput.value = parseInt(el.style.gap) || '';
+    if (wrapSelect) wrapSelect.value = el.style.flexWrap || '';
+
+    loadColorHistory();
 
     // Pre-populate custom HTML
     document.getElementById('stp-html-input').value = el.innerHTML;
@@ -1153,25 +1542,18 @@
         fontSize.value = parseFloat(val['font-size']) || currentFSize;
         fontSizeVal.textContent = (val['font-size'] || currentFSize + 'px');
         borderRadius.value = parseFloat(val['border-radius']) || currentBRad;
-        borderRadiusVal.textContent = (val['border-radius'] || currentBRad + 'px');
         opacity.value = val.opacity !== undefined ? Math.round(parseFloat(val.opacity) * 100) : currentOp;
-        opacityVal.textContent = (val.opacity !== undefined ? Math.round(parseFloat(val.opacity) * 100) : currentOp) + '%';
+        opacityVal.textContent = opacity.value + '%';
         paddingInput.value = val.padding ? parseInt(val.padding) : '';
         marginInput.value = val.margin ? parseInt(val.margin) : '';
-      } else {
-        // Reset to computed styles
-        colorText.value = textColHex;
-        colorTextHex.value = textColHex;
-        colorBg.value = bgColHex;
-        colorBgHex.value = bgColHex;
-        fontSize.value = currentFSize;
-        fontSizeVal.textContent = currentFSize + 'px';
-        borderRadius.value = currentBRad;
-        borderRadiusVal.textContent = currentBRad + 'px';
-        opacity.value = currentOp;
-        opacityVal.textContent = currentOp + '%';
-        paddingInput.value = parseInt(computed.paddingTop) || '';
-        marginInput.value = parseInt(computed.marginTop) || '';
+        if (fontSelect) fontSelect.value = val['font-family'] || '';
+        if (fontWeightSelect) fontWeightSelect.value = val['font-weight'] || '';
+        if (displaySelect) displaySelect.value = val['display'] || '';
+        if (directionSelect) directionSelect.value = val['flex-direction'] || '';
+        if (justifySelect) justifySelect.value = val['justify-content'] || '';
+        if (alignSelect) alignSelect.value = val['align-items'] || '';
+        if (gapInput) gapInput.value = val['gap'] ? parseInt(val['gap']) : '';
+        if (wrapSelect) wrapSelect.value = val['flex-wrap'] || '';
       }
     };
 
@@ -1193,35 +1575,9 @@
     const selectBgRepeat = document.getElementById('stp-bg-repeat');
 
     // Prepopulate background styling values
-    if (computed.backgroundImage && computed.backgroundImage !== 'none') {
-      btnClearBgImg.style.display = 'block';
+    if (computed.backgroundImage && computed.backgroundImage !== 'none' && !computed.backgroundImage.includes('linear-gradient')) {
+      if (btnClearBgImg) btnClearBgImg.style.display = 'block';
       if (bgOptionsContainer) bgOptionsContainer.style.display = 'flex';
-
-      if (selectBgSize) {
-        const sz = el.style.backgroundSize || computed.backgroundSize;
-        if (['cover', 'contain', 'auto'].includes(sz)) selectBgSize.value = sz;
-      }
-      if (selectBgPosition) {
-        const pos = el.style.backgroundPosition || computed.backgroundPosition;
-        if (pos.includes('top')) selectBgPosition.value = 'top';
-        else if (pos.includes('bottom')) selectBgPosition.value = 'bottom';
-        else if (pos.includes('left')) selectBgPosition.value = 'left';
-        else if (pos.includes('right')) selectBgPosition.value = 'right';
-        else if (pos.includes('px') || /^-?\d+/.test(pos)) {
-          selectBgPosition.value = 'custom';
-          const parts = pos.split(' ');
-          if (parts[0]) document.getElementById('stp-bg-pos-x').value = parseInt(parts[0]) || 0;
-          if (parts[1]) document.getElementById('stp-bg-pos-y').value = parseInt(parts[1]) || 0;
-          const customPosBlock = document.getElementById('stp-bg-custom-position');
-          if (customPosBlock) customPosBlock.style.display = 'flex';
-        }
-        else selectBgPosition.value = 'center';
-      }
-      if (selectBgRepeat) {
-        const rep = el.style.backgroundRepeat || computed.backgroundRepeat;
-        if (rep.includes('no-repeat')) selectBgRepeat.value = 'no-repeat';
-        else if (rep.includes('repeat')) selectBgRepeat.value = 'repeat';
-      }
     }
 
     // Pre-populate tag image styling values
@@ -1236,103 +1592,26 @@
       if (el.hasAttribute('data-stp-original-src')) {
         document.getElementById('stp-btn-revert-img-src').style.display = 'block';
       }
-
       if (selectImgFit) {
         const fit = el.style.objectFit || computed.objectFit;
         if (['fill', 'cover', 'contain', 'none'].includes(fit)) selectImgFit.value = fit;
       }
-      if (selectImgPosition) {
-        const pos = el.style.objectPosition || computed.objectPosition;
-        if (pos.includes('top')) selectImgPosition.value = 'top';
-        else if (pos.includes('bottom')) selectImgPosition.value = 'bottom';
-        else if (pos.includes('left')) selectImgPosition.value = 'left';
-        else if (pos.includes('right')) selectImgPosition.value = 'right';
-        else selectImgPosition.value = 'center';
-      }
     }
 
-    // Live update bindings
-    colorText.oninput = () => {
-      colorTextHex.value = colorText.value;
-      applyLiveStyles();
-    };
-    colorTextHex.oninput = () => {
-      if (/^#[0-9A-F]{6}$/i.test(colorTextHex.value)) {
-        colorText.value = colorTextHex.value;
-        applyLiveStyles();
-      }
-    };
-
-    colorBg.oninput = () => {
-      colorBgHex.value = colorBg.value;
-      applyLiveStyles();
-    };
-    colorBgHex.oninput = () => {
-      if (/^#[0-9A-F]{6}$/i.test(colorBgHex.value)) {
-        colorBg.value = colorBgHex.value;
-        applyLiveStyles();
-      }
-    };
-
-    // Text color Eyedropper API
-    const btnEyedropperText = document.getElementById('stp-btn-eyedropper-text');
-    if (btnEyedropperText) {
-      if (!window.EyeDropper) {
-        btnEyedropperText.style.display = 'none';
-      } else {
-        btnEyedropperText.onclick = () => {
-          const eyeDropper = new EyeDropper();
-          eyeDropper.open().then((result) => {
-            const hexColor = result.sRGBHex;
-            colorText.value = hexColor;
-            colorTextHex.value = hexColor.toUpperCase();
-            applyLiveStyles();
-            showToast('Цвет текста выбран с экрана!');
-          }).catch((err) => {
-            // Eyedropper cancelled
-          });
-        };
+    // Load dynamic google fonts script
+    function loadGoogleFont(fontFamily) {
+      if (!fontFamily) return;
+      const cleanFontName = fontFamily.replace(/['"]/g, '').split(',')[0].trim();
+      const url = `https://fonts.googleapis.com/css2?family=${cleanFontName.replace(/ /g, '+')}:wght@300;400;500;600;700&display=swap`;
+      
+      let link = document.head.querySelector(`link[href="${url}"]`);
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = url;
+        document.head.appendChild(link);
       }
     }
-
-    // Background color Eyedropper API
-    const btnEyedropperBg = document.getElementById('stp-btn-eyedropper-bg');
-    if (btnEyedropperBg) {
-      if (!window.EyeDropper) {
-        btnEyedropperBg.style.display = 'none';
-      } else {
-        btnEyedropperBg.onclick = () => {
-          const eyeDropper = new EyeDropper();
-          eyeDropper.open().then((result) => {
-            const hexColor = result.sRGBHex;
-            colorBg.value = hexColor;
-            colorBgHex.value = hexColor.toUpperCase();
-            applyLiveStyles();
-            showToast('Цвет фона выбран с экрана!');
-          }).catch((err) => {
-            // Eyedropper cancelled
-          });
-        };
-      }
-    }
-
-    fontSize.oninput = () => {
-      fontSizeVal.textContent = fontSize.value + 'px';
-      applyLiveStyles();
-    };
-
-    borderRadius.oninput = () => {
-      borderRadiusVal.textContent = borderRadius.value + 'px';
-      applyLiveStyles();
-    };
-
-    opacity.oninput = () => {
-      opacityVal.textContent = opacity.value + '%';
-      applyLiveStyles();
-    };
-
-    paddingInput.oninput = applyLiveStyles;
-    marginInput.oninput = applyLiveStyles;
 
     function applyLiveStyles() {
       el.style.setProperty('color', colorText.value, 'important');
@@ -1353,91 +1632,166 @@
         el.style.removeProperty('margin');
       }
 
-      // Live apply background image helper rules
-      const hasBg = el.style.backgroundImage && el.style.backgroundImage !== 'none';
-      if (hasBg) {
-        if (selectBgSize && selectBgSize.value) {
-          el.style.setProperty('background-size', selectBgSize.value, 'important');
-        }
-        if (selectBgPosition && selectBgPosition.value) {
-          if (selectBgPosition.value === 'custom') {
-            const posX = document.getElementById('stp-bg-pos-x').value || '0';
-            const posY = document.getElementById('stp-bg-pos-y').value || '0';
-            el.style.setProperty('background-position', `${posX}px ${posY}px`, 'important');
-          } else {
-            el.style.setProperty('background-position', selectBgPosition.value, 'important');
-          }
-        }
-        if (selectBgRepeat && selectBgRepeat.value) {
-          el.style.setProperty('background-repeat', selectBgRepeat.value, 'important');
+      // Typography
+      if (fontSelect && fontSelect.value) {
+        loadGoogleFont(fontSelect.value);
+        el.style.setProperty('font-family', fontSelect.value, 'important');
+      } else {
+        el.style.removeProperty('font-family');
+      }
+
+      if (fontWeightSelect && fontWeightSelect.value) {
+        el.style.setProperty('font-weight', fontWeightSelect.value, 'important');
+      } else {
+        el.style.removeProperty('font-weight');
+      }
+
+      if (lineHeightInput && lineHeightInput.value) {
+        el.style.setProperty('line-height', lineHeightInput.value, 'important');
+      } else {
+        el.style.removeProperty('line-height');
+      }
+
+      if (letterSpacing && letterSpacing.value != 0) {
+        el.style.setProperty('letter-spacing', letterSpacing.value + 'px', 'important');
+      } else {
+        el.style.removeProperty('letter-spacing');
+      }
+
+      // Text shadow
+      if (tsXInput && tsYInput && tsBlurInput && tsColorInput) {
+        if (tsXInput.value == 0 && tsYInput.value == 0 && tsBlurInput.value == 0) {
+          el.style.removeProperty('text-shadow');
+        } else {
+          el.style.setProperty('text-shadow', `${tsXInput.value}px ${tsYInput.value}px ${tsBlurInput.value}px ${tsColorInput.value}`, 'important');
         }
       }
 
-      // Live apply photo img object fit helper rules
-      if (isImgTag) {
-        if (selectImgFit && selectImgFit.value) {
-          el.style.setProperty('object-fit', selectImgFit.value, 'important');
+      // Box shadow
+      if (bsXInput && bsYInput && bsBlurInput && bsSpreadInput && bsColorInput && bsInsetInput) {
+        if (bsXInput.value == 0 && bsYInput.value == 0 && bsBlurInput.value == 0 && bsSpreadInput.value == 0) {
+          el.style.removeProperty('box-shadow');
+        } else {
+          const insetText = bsInsetInput.checked ? 'inset ' : '';
+          el.style.setProperty('box-shadow', `${insetText}${bsXInput.value}px ${bsYInput.value}px ${bsBlurInput.value}px ${bsSpreadInput.value}px ${bsColorInput.value}`, 'important');
         }
-        if (selectImgPosition && selectImgPosition.value) {
-          el.style.setProperty('object-position', selectImgPosition.value, 'important');
-        }
+      }
+
+      // Layout
+      if (displaySelect && displaySelect.value) {
+        el.style.setProperty('display', displaySelect.value, 'important');
+      } else {
+        el.style.removeProperty('display');
+      }
+      if (directionSelect && directionSelect.value) {
+        el.style.setProperty('flex-direction', directionSelect.value, 'important');
+      } else {
+        el.style.removeProperty('flex-direction');
+      }
+      if (justifySelect && justifySelect.value) {
+        el.style.setProperty('justify-content', justifySelect.value, 'important');
+      } else {
+        el.style.removeProperty('justify-content');
+      }
+      if (alignSelect && alignSelect.value) {
+        el.style.setProperty('align-items', alignSelect.value, 'important');
+      } else {
+        el.style.removeProperty('align-items');
+      }
+      if (gapInput && gapInput.value !== '') {
+        el.style.setProperty('gap', gapInput.value + 'px', 'important');
+      } else {
+        el.style.removeProperty('gap');
+      }
+      if (wrapSelect && wrapSelect.value) {
+        el.style.setProperty('flex-wrap', wrapSelect.value, 'important');
+      } else {
+        el.style.removeProperty('flex-wrap');
+      }
+
+      // Image & BG fallback handles...
+      if (isImgTag && selectImgFit && selectImgFit.value) {
+        el.style.setProperty('object-fit', selectImgFit.value, 'important');
       }
     }
 
-    // Bind dropdown selectors live updates
-    if (selectBgSize) selectBgSize.onchange = applyLiveStyles;
-    if (selectBgPosition) {
-      selectBgPosition.onchange = () => {
-        const customBlock = document.getElementById('stp-bg-custom-position');
-        if (selectBgPosition.value === 'custom') {
-          if (customBlock) customBlock.style.display = 'flex';
-        } else {
-          if (customBlock) customBlock.style.display = 'none';
-        }
-        applyLiveStyles();
+    // Attach Event Listeners
+    colorText.oninput = () => { colorTextHex.value = colorText.value; applyLiveStyles(); };
+    colorTextHex.oninput = () => { if (/^#[0-9A-F]{6}$/i.test(colorTextHex.value)) { colorText.value = colorTextHex.value; applyLiveStyles(); }};
+    colorBg.oninput = () => { colorBgHex.value = colorBg.value; applyLiveStyles(); };
+    colorBgHex.oninput = () => { if (/^#[0-9A-F]{6}$/i.test(colorBgHex.value)) { colorBg.value = colorBgHex.value; applyLiveStyles(); }};
+    
+    fontSize.oninput = () => { fontSizeVal.textContent = fontSize.value + 'px'; applyLiveStyles(); };
+    borderRadius.oninput = () => { applyLiveStyles(); };
+    opacity.oninput = () => { opacityVal.textContent = opacity.value + '%'; applyLiveStyles(); };
+    
+    if (fontSelect) fontSelect.onchange = applyLiveStyles;
+    if (fontWeightSelect) fontWeightSelect.onchange = applyLiveStyles;
+    if (lineHeightInput) lineHeightInput.oninput = applyLiveStyles;
+    if (letterSpacing) letterSpacing.oninput = () => { letterSpacingVal.textContent = letterSpacing.value + 'px'; applyLiveStyles(); };
+    
+    if (tsXInput) tsXInput.oninput = applyLiveStyles;
+    if (tsYInput) tsYInput.oninput = applyLiveStyles;
+    if (tsBlurInput) tsBlurInput.oninput = applyLiveStyles;
+    if (tsColorInput) tsColorInput.oninput = applyLiveStyles;
+
+    if (bsXInput) bsXInput.oninput = applyLiveStyles;
+    if (bsYInput) bsYInput.oninput = applyLiveStyles;
+    if (bsBlurInput) bsBlurInput.oninput = applyLiveStyles;
+    if (bsSpreadInput) bsSpreadInput.oninput = applyLiveStyles;
+    if (bsColorInput) bsColorInput.oninput = applyLiveStyles;
+    if (bsInsetInput) bsInsetInput.onchange = applyLiveStyles;
+
+    if (btnApplyGrad && gradCol1Input && gradCol2Input && gradAngleInput) {
+      gradAngleInput.oninput = () => { gradAngleVal.textContent = gradAngleInput.value + '°'; };
+      btnApplyGrad.onclick = () => {
+        const bgVal = `linear-gradient(${gradAngleInput.value}deg, ${gradCol1Input.value}, ${gradCol2Input.value})`;
+        el.style.setProperty('background-image', bgVal, 'important');
+        if (btnRemoveGrad) btnRemoveGrad.style.display = 'block';
+      };
+    }
+    if (btnRemoveGrad) {
+      btnRemoveGrad.onclick = () => {
+        el.style.removeProperty('background-image');
+        btnRemoveGrad.style.display = 'none';
       };
     }
 
-    const inputBgPosX = document.getElementById('stp-bg-pos-x');
-    const inputBgPosY = document.getElementById('stp-bg-pos-y');
-    if (inputBgPosX) inputBgPosX.oninput = applyLiveStyles;
-    if (inputBgPosY) inputBgPosY.oninput = applyLiveStyles;
-
-    if (selectBgRepeat) selectBgRepeat.onchange = applyLiveStyles;
-    if (isImgTag) {
-      if (selectImgFit) selectImgFit.onchange = applyLiveStyles;
-      if (selectImgPosition) selectImgPosition.onchange = applyLiveStyles;
-    }
+    paddingInput.oninput = applyLiveStyles;
+    marginInput.oninput = applyLiveStyles;
+    if (displaySelect) displaySelect.onchange = applyLiveStyles;
+    if (directionSelect) directionSelect.onchange = applyLiveStyles;
+    if (justifySelect) justifySelect.onchange = applyLiveStyles;
+    if (alignSelect) alignSelect.onchange = applyLiveStyles;
+    if (gapInput) gapInput.oninput = applyLiveStyles;
+    if (wrapSelect) wrapSelect.onchange = applyLiveStyles;
 
     // BG Image upload
-    btnUploadBgImg.onclick = () => uploadBgImg.click();
-    uploadBgImg.onchange = (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-
-      showToast('Сжатие фонового изображения...');
-      compressAndResizeImage(file, 1200, 0.8).then((dataUrl) => {
-        el.style.setProperty('background-image', `url("${dataUrl}")`, 'important');
-        btnClearBgImg.style.display = 'block';
-        if (bgOptionsContainer) bgOptionsContainer.style.display = 'flex';
-        applyLiveStyles();
-        showToast('Фоновое изображение установлено!');
-      }).catch((err) => {
-        showToast('Ошибка сжатия изображения');
-      });
-    };
-
-    btnClearBgImg.onclick = () => {
-      el.style.removeProperty('background-image');
-      el.style.removeProperty('background-size');
-      el.style.removeProperty('background-position');
-      el.style.removeProperty('background-repeat');
-      uploadBgImg.value = '';
-      btnClearBgImg.style.display = 'none';
-      if (bgOptionsContainer) bgOptionsContainer.style.display = 'none';
-      showToast('Фоновое изображение удалено.');
-    };
-
+    if (btnUploadBgImg && uploadBgImg) {
+      btnUploadBgImg.onclick = () => uploadBgImg.click();
+      uploadBgImg.onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        showToast('Сжатие фонового изображения...');
+        compressAndResizeImage(file, 1200, 0.8).then((dataUrl) => {
+          el.style.setProperty('background-image', `url("${dataUrl}")`, 'important');
+          if (btnClearBgImg) btnClearBgImg.style.display = 'block';
+          if (bgOptionsContainer) bgOptionsContainer.style.display = 'flex';
+          applyLiveStyles();
+          showToast('Фоновое изображение установлено!');
+        });
+      };
+    }
+    if (btnClearBgImg) {
+      btnClearBgImg.onclick = () => {
+        el.style.removeProperty('background-image');
+        uploadBgImg.value = '';
+        btnClearBgImg.style.display = 'none';
+        if (bgOptionsContainer) bgOptionsContainer.style.display = 'none';
+        showToast('Фоновое изображение удалено.');
+      };
+    }
+    
     // IMG Tag Src replacement
     if (isImgTag) {
       const uploadImgSrc = document.getElementById('stp-upload-img-src');
@@ -1531,27 +1885,40 @@
         'opacity': (opacity.value / 100).toString()
       };
 
-      if (paddingInput.value !== '') {
-        stylesObj['padding'] = paddingInput.value + 'px';
+      if (paddingInput.value !== '') stylesObj['padding'] = paddingInput.value + 'px';
+      if (marginInput.value !== '') stylesObj['margin'] = marginInput.value + 'px';
+
+      if (fontSelect && fontSelect.value) stylesObj['font-family'] = fontSelect.value;
+      if (fontWeightSelect && fontWeightSelect.value) stylesObj['font-weight'] = fontWeightSelect.value;
+      if (lineHeightInput && lineHeightInput.value) stylesObj['line-height'] = lineHeightInput.value;
+      if (letterSpacing && letterSpacing.value != 0) stylesObj['letter-spacing'] = letterSpacing.value + 'px';
+
+      if (tsXInput && tsYInput && tsBlurInput && tsColorInput) {
+        if (!(tsXInput.value == 0 && tsYInput.value == 0 && tsBlurInput.value == 0)) {
+          stylesObj['text-shadow'] = `${tsXInput.value}px ${tsYInput.value}px ${tsBlurInput.value}px ${tsColorInput.value}`;
+        }
       }
-      if (marginInput.value !== '') {
-        stylesObj['margin'] = marginInput.value + 'px';
+
+      if (bsXInput && bsYInput && bsBlurInput && bsSpreadInput && bsColorInput && bsInsetInput) {
+        if (!(bsXInput.value == 0 && bsYInput.value == 0 && bsBlurInput.value == 0 && bsSpreadInput.value == 0)) {
+          const insetText = bsInsetInput.checked ? 'inset ' : '';
+          stylesObj['box-shadow'] = `${insetText}${bsXInput.value}px ${bsYInput.value}px ${bsBlurInput.value}px ${bsSpreadInput.value}px ${bsColorInput.value}`;
+        }
       }
 
       const bgImg = el.style.backgroundImage;
       if (bgImg && bgImg !== 'none') {
         stylesObj['background-image'] = bgImg;
+        // Check if old image options exist
+        const selectBgSize = document.getElementById('stp-bg-size');
+        const selectBgPosition = document.getElementById('stp-bg-position');
+        const selectBgRepeat = document.getElementById('stp-bg-repeat');
+
         if (selectBgSize && selectBgSize.value) {
           stylesObj['background-size'] = selectBgSize.value;
         }
         if (selectBgPosition && selectBgPosition.value) {
-          if (selectBgPosition.value === 'custom') {
-            const posX = document.getElementById('stp-bg-pos-x').value || '0';
-            const posY = document.getElementById('stp-bg-pos-y').value || '0';
-            stylesObj['background-position'] = `${posX}px ${posY}px`;
-          } else {
-            stylesObj['background-position'] = selectBgPosition.value;
-          }
+          stylesObj['background-position'] = selectBgPosition.value;
         }
         if (selectBgRepeat && selectBgRepeat.value) {
           stylesObj['background-repeat'] = selectBgRepeat.value;
@@ -1559,13 +1926,21 @@
       }
 
       if (isImgTag) {
+        const selectImgFit = document.getElementById('stp-img-fit');
         if (selectImgFit && selectImgFit.value) {
           stylesObj['object-fit'] = selectImgFit.value;
         }
-        if (selectImgPosition && selectImgPosition.value) {
-          stylesObj['object-position'] = selectImgPosition.value;
-        }
       }
+
+      if (displaySelect && displaySelect.value) stylesObj['display'] = displaySelect.value;
+      if (directionSelect && directionSelect.value) stylesObj['flex-direction'] = directionSelect.value;
+      if (justifySelect && justifySelect.value) stylesObj['justify-content'] = justifySelect.value;
+      if (alignSelect && alignSelect.value) stylesObj['align-items'] = alignSelect.value;
+      if (gapInput && gapInput.value !== '') stylesObj['gap'] = gapInput.value + 'px';
+      if (wrapSelect && wrapSelect.value) stylesObj['flex-wrap'] = wrapSelect.value;
+
+      addColorToHistory(colorText.value);
+      addColorToHistory(colorBg.value);
 
       const rule = {
         id: 'rule_' + Date.now(),
@@ -1577,6 +1952,7 @@
 
       addOrUpdateHTMLRule(rule);
       showToast('Визуальные стили элемента сохранены!');
+      flashGreenElement(el);
     };
 
     // Reset visual styles
@@ -1588,46 +1964,31 @@
       el.style.removeProperty('opacity');
       el.style.removeProperty('padding');
       el.style.removeProperty('margin');
+      el.style.removeProperty('font-family');
+      el.style.removeProperty('font-weight');
+      el.style.removeProperty('line-height');
+      el.style.removeProperty('letter-spacing');
+      el.style.removeProperty('text-shadow');
+      el.style.removeProperty('box-shadow');
       el.style.removeProperty('background-image');
       el.style.removeProperty('background-size');
       el.style.removeProperty('background-position');
       el.style.removeProperty('background-repeat');
       el.style.removeProperty('object-fit');
       el.style.removeProperty('object-position');
+      el.style.removeProperty('display');
+      el.style.removeProperty('flex-direction');
+      el.style.removeProperty('justify-content');
+      el.style.removeProperty('align-items');
+      el.style.removeProperty('gap');
+      el.style.removeProperty('flex-wrap');
 
-      removeHTMLRule(activeSelector, 'edit_style');
-
-      // Re-populate computed styles
-      const currentComputed = window.getComputedStyle(el);
-      const hexText = rgbToHex(currentComputed.color);
-      const hexBg = rgbToHex(currentComputed.backgroundColor);
-      colorText.value = hexText;
-      colorTextHex.value = hexText;
-      colorBg.value = hexBg;
-      colorBgHex.value = hexBg;
-      fontSize.value = parseFloat(currentComputed.fontSize);
-      fontSizeVal.textContent = currentComputed.fontSize;
-      borderRadius.value = parseFloat(currentComputed.borderRadius) || 0;
-      borderRadiusVal.textContent = (parseFloat(currentComputed.borderRadius) || 0) + 'px';
-      opacity.value = parseFloat(currentComputed.opacity) * 100 || 100;
-      opacityVal.textContent = Math.round(parseFloat(currentComputed.opacity) * 100 || 100) + '%';
-      paddingInput.value = '';
-      marginInput.value = '';
-      btnClearBgImg.style.display = 'none';
-      if (bgOptionsContainer) bgOptionsContainer.style.display = 'none';
-      if (isImgTag) {
-        const imgOptionsContainer = document.getElementById('stp-img-options');
-        if (imgOptionsContainer) imgOptionsContainer.style.display = 'none';
-      }
-
-      showToast('Стили элемента сброшены до исходных.');
+      // Update UI components
+      loadRuleValues(activeSelector);
+      showToast('Все измененные стили сброшены.');
     };
 
-    // Event Handlers for close and save
-    document.getElementById('stp-modal-close').onclick = () => inspectorModal.remove();
-    document.getElementById('stp-finish-inspect').onclick = () => toggleInspectorMode(false);
-
-    // Save HTML Action
+    // HTML Save
     document.getElementById('stp-save-html').onclick = () => {
       const newHTML = document.getElementById('stp-html-input').value;
       if (!el.hasAttribute('data-stp-original-html')) {
@@ -1645,6 +2006,7 @@
 
       addOrUpdateHTMLRule(rule);
       showToast('HTML код элемента изменен и сохранен!');
+      flashGreenElement(el);
     };
 
     // Revert HTML Action
@@ -1795,6 +2157,7 @@
       input.value = '';
       updateClassesAndAttributesUI();
       showToast(`Класс .${val} добавлен!`);
+      flashGreenElement(el);
     };
 
     // Add Attribute binding
@@ -1821,6 +2184,7 @@
       inputVal.value = '';
       updateClassesAndAttributesUI();
       showToast(`Атрибут ${name} изменен!`);
+      flashGreenElement(el);
     };
 
     // Scope selection inside inspector modal
@@ -1844,6 +2208,20 @@
 
     // Run initial classes update
     updateClassesAndAttributesUI();
+
+    // === Close / Done button handlers ===
+    const closeModal = () => {
+      if (inspectorModal) {
+        inspectorModal.remove();
+        inspectorModal = null;
+      }
+      toggleInspectorMode(false);
+    };
+
+    const closeBtn = document.getElementById('stp-modal-close');
+    const finishBtn = document.getElementById('stp-finish-inspect');
+    if (closeBtn) closeBtn.onclick = closeModal;
+    if (finishBtn) finishBtn.onclick = closeModal;
   }
 
   function getSelectedInspectorScope() {
@@ -2142,6 +2520,161 @@
         default: return m;
       }
     });
+  }
+
+  function injectGoogleFonts() {
+    if (!document.getElementById('stp-google-fonts')) {
+      const link = document.createElement('link');
+      link.id = 'stp-google-fonts';
+      link.rel = 'stylesheet';
+      link.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Montserrat:wght@300;400;600;700&family=Roboto:wght@300;400;500;700&family=Open+Sans:wght@300;400;600;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap';
+      
+      const target = document.head || document.documentElement;
+      if (target) {
+        target.appendChild(link);
+      } else {
+        document.addEventListener('DOMContentLoaded', () => {
+          if (document.head) document.head.appendChild(link);
+        });
+      }
+    }
+  }
+
+  function handleLiveSyncWatcher(url) {
+    if (!url) {
+      if (liveSyncInterval) {
+        clearInterval(liveSyncInterval);
+        liveSyncInterval = null;
+      }
+      const link = document.getElementById('stp-live-sync-css');
+      if (link) link.remove();
+      return;
+    }
+
+    if (liveSyncInterval) {
+      // Re-trigger if URL changed
+      const link = document.getElementById('stp-live-sync-css');
+      if (link && link.getAttribute('data-base-url') === url) {
+        return;
+      }
+      clearInterval(liveSyncInterval);
+    }
+
+    let link = document.getElementById('stp-live-sync-css');
+    if (!link) {
+      link = document.createElement('link');
+      link.id = 'stp-live-sync-css';
+      link.rel = 'stylesheet';
+      const target = document.head || document.documentElement;
+      if (target) {
+        target.appendChild(link);
+      } else {
+        document.addEventListener('DOMContentLoaded', () => {
+          if (document.head) document.head.appendChild(link);
+        });
+      }
+    }
+    link.setAttribute('data-base-url', url);
+
+    liveSyncInterval = setInterval(() => {
+      link.href = url + '?t=' + Date.now();
+    }, 1000);
+  }
+
+  function loadColorHistory() {
+    chrome.storage.local.get(['stpColorHistory'], (res) => {
+      colorHistory = res.stpColorHistory || ['#6366F1', '#10B981', '#EF4444', '#F59E0B', '#3B82F6', '#EC4899'];
+      renderColorHistoryUI();
+    });
+  }
+
+  function addColorToHistory(color) {
+    if (!color || color === 'transparent') return;
+    color = color.toUpperCase();
+    colorHistory = colorHistory.filter(c => c !== color);
+    colorHistory.unshift(color);
+    if (colorHistory.length > 6) {
+      colorHistory.pop();
+    }
+    chrome.storage.local.set({ stpColorHistory: colorHistory }, () => {
+      renderColorHistoryUI();
+    });
+  }
+
+  function renderColorHistoryUI() {
+    const container = document.getElementById('stp-color-history-container');
+    if (!container) return;
+    container.innerHTML = '';
+    colorHistory.forEach(color => {
+      const circle = document.createElement('div');
+      circle.style.width = '18px';
+      circle.style.height = '18px';
+      circle.style.borderRadius = '50%';
+      circle.style.backgroundColor = color;
+      circle.style.cursor = 'pointer';
+      circle.style.border = '1px solid rgba(255,255,255,0.2)';
+      circle.title = color + ' (L-click for BG, R-click for Text)';
+      
+      circle.onclick = (e) => {
+        e.preventDefault();
+        const colorBg = document.getElementById('stp-color-bg');
+        const colorBgHex = document.getElementById('stp-color-bg-hex');
+        if (colorBg && colorBgHex) {
+          colorBg.value = color;
+          colorBgHex.value = color;
+          applyLiveStyles();
+          showToast(`Цвет фона изменен на ${color}`);
+        }
+      };
+
+      circle.oncontextmenu = (e) => {
+        e.preventDefault();
+        const colorText = document.getElementById('stp-color-text');
+        const colorTextHex = document.getElementById('stp-color-text-hex');
+        if (colorText && colorTextHex) {
+          colorText.value = color;
+          colorTextHex.value = color;
+          applyLiveStyles();
+          showToast(`Цвет текста изменен на ${color}`);
+        }
+      };
+
+      container.appendChild(circle);
+    });
+  }
+
+  function flashGreenElement(el) {
+    if (!el) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'site-tweaker-highlight-box';
+    overlay.style.borderColor = '#10b981';
+    overlay.style.backgroundColor = 'rgba(16, 185, 129, 0.35)';
+    overlay.style.boxShadow = '0 0 15px rgba(16, 185, 129, 0.6)';
+    overlay.style.pointerEvents = 'none';
+    overlay.style.position = 'absolute';
+    overlay.style.zIndex = '9999999';
+    overlay.style.transition = 'all 1s cubic-bezier(0.16, 1, 0.3, 1)';
+    document.body.appendChild(overlay);
+
+    const updatePosition = () => {
+      const rect = el.getBoundingClientRect();
+      const scrollX = window.scrollX || window.pageXOffset;
+      const scrollY = window.scrollY || window.pageYOffset;
+      overlay.style.top = `${rect.top + scrollY}px`;
+      overlay.style.left = `${rect.left + scrollX}px`;
+      overlay.style.width = `${rect.width}px`;
+      overlay.style.height = `${rect.height}px`;
+    };
+    updatePosition();
+
+    requestAnimationFrame(() => {
+      overlay.style.opacity = '0';
+      overlay.style.transform = 'scale(1.05)';
+    });
+
+    setTimeout(() => {
+      overlay.remove();
+    }, 1000);
   }
 
 })();

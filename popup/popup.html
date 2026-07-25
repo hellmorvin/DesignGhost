@@ -72,7 +72,23 @@
       <section class="tab-pane active" id="tab-css">
         <div class="editor-toolbar">
           <span class="toolbar-title">Собственный CSS код</span>
+          <span id="auto-save-status" style="font-size: 10px; color: var(--text-muted); opacity: 0.8; margin-left: auto; margin-right: 8px; display: flex; align-items: center; gap: 4px;">
+            <span style="display:inline-block; width:6px; height:6px; background:#10b981; border-radius:50%;"></span>
+            Сохранено
+          </span>
           <div class="toolbar-actions">
+            <button class="btn-icon" id="btn-undo-css" title="Отменить (Ctrl+Z)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 7v6h6"></path>
+                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>
+              </svg>
+            </button>
+            <button class="btn-icon" id="btn-redo-css" title="Вернуть (Ctrl+Shift+Z)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 7v6h-6"></path>
+                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"></path>
+              </svg>
+            </button>
             <button class="btn-icon" id="btn-insert-img-css" title="Вставить изображение (base64)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
@@ -133,18 +149,7 @@
           </button>
         </div>
 
-        <div class="search-inspector-container">
-          <div class="search-input-group">
-            <input type="text" id="inspector-search-input" placeholder="Поиск по селектору, классу или тексту..." class="form-input">
-            <button class="btn btn-primary" id="btn-search-elements" title="Найти элементы">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              </svg>
-            </button>
-          </div>
-          <div id="search-results-list" class="search-results-list" style="display: none;"></div>
-        </div>
+        
 
         <div class="section-divider">
           <span>Сохраненные HTML правила для сайта</span>
@@ -173,6 +178,8 @@
                 <option value="hide">Скрыть (display: none)</option>
                 <option value="remove">Удалить из DOM</option>
                 <option value="edit_html">Изменить HTML</option>
+                <option value="edit_style">Изменить Стиль (JSON)</option>
+                <option value="edit_attribute">Изменить Атрибут</option>
               </select>
             </div>
             <div class="form-group" id="manual-value-group" style="display: none;">
@@ -218,21 +225,28 @@
         </div>
       </section>
 
-      <!-- TAB 4: BACKUP & ALL SITES -->
+
+      <!-- TAB 6: SETTINGS -->
       <section class="tab-pane" id="tab-settings">
         <div class="settings-card">
-          <h4>💾 Экспорт и Импорт (Резервное копирование)</h4>
-          <p class="settings-desc">Сохраните ваши кастомные стили и правила в JSON файл, чтобы перенести их на другой ПК или восстановить в любое время.</p>
-          <div class="btn-group">
-            <button class="btn btn-secondary" id="btn-export-json">
-              📥 Экспортировать JSON
-            </button>
-            <button class="btn btn-secondary" id="btn-import-json">
-              📤 Импортировать JSON
-            </button>
+          <h4>💾 Резервное копирование и Экспорт</h4>
+          <p class="settings-desc">Сохраните ваши стили и правила в файл или настройте автоматические резервные копии.</p>
+          <div class="btn-group" style="margin-bottom: 12px;">
+            <button class="btn btn-secondary" id="btn-export-json" style="font-size: 11px;">📥 Экспорт JSON</button>
+            <button class="btn btn-secondary" id="btn-import-json" style="font-size: 11px;">📤 Импорт JSON</button>
+            <button class="btn btn-secondary" id="btn-export-css" style="font-size: 11px;">📄 Экспорт CSS</button>
             <input type="file" id="import-file-input" accept=".json" style="display:none">
           </div>
+          <div style="border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 10px;">
+            <span class="stp-label" style="text-align: left; margin-bottom: 6px; font-weight: bold; font-size: 11px;">Автоматические бэкапы</span>
+            <div id="backups-list" style="display: flex; flex-direction: column; gap: 6px; margin-top: 6px;">
+              <div class="empty-state">Нет созданных бэкапов</div>
+            </div>
+            <button class="btn btn-secondary btn-full" id="btn-create-backup-now" style="margin-top: 8px; font-size: 11px; padding: 6px 12px; height: auto;">📦 Создать бэкап сейчас</button>
+          </div>
         </div>
+
+
 
         <div class="settings-card">
           <h4>🌐 Сайты с кастомным дизайном</h4>
@@ -240,7 +254,7 @@
             <div class="empty-state">Загрузка списка сайтов...</div>
           </div>
         </div>
-
+        
         <div class="settings-card support-card" style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(168, 85, 247, 0.08)); border: 1px solid rgba(99, 102, 241, 0.25);">
           <h4 style="color: #a855f7; display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">

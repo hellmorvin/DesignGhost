@@ -50,3 +50,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: true });
   }
 });
+
+// Listener for hotkey commands
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "toggle-inspector") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0] && tabs[0].id) {
+        chrome.tabs.sendMessage(tabs[0].id, { action: "TOGGLE_INSPECTOR" }).catch(() => {});
+      }
+    });
+  }
+});

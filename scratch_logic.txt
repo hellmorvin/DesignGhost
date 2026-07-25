@@ -1,0 +1,430 @@
+
+    // Pre-populate visually with computed values
+    const computed = window.getComputedStyle(el);
+    const textColHex = rgbToHex(computed.color);
+    const bgColHex = rgbToHex(computed.backgroundColor);
+
+    const colorText = document.getElementById('stp-color-text');
+    const colorTextHex = document.getElementById('stp-color-text-hex');
+    const colorBg = document.getElementById('stp-color-bg');
+    const colorBgHex = document.getElementById('stp-color-bg-hex');
+    const fontSize = document.getElementById('stp-font-size');
+    const fontSizeVal = document.getElementById('stp-font-size-val');
+    const borderRadius = document.getElementById('stp-border-radius');
+    const borderRadiusVal = document.getElementById('stp-border-radius-val');
+    const opacity = document.getElementById('stp-opacity');
+    const opacityVal = document.getElementById('stp-opacity-val');
+    const paddingInput = document.getElementById('stp-padding');
+    const marginInput = document.getElementById('stp-margin');
+
+    // Image/Background controls
+    const uploadBgImg = document.getElementById('stp-upload-bg-img');
+    const btnUploadBgImg = document.getElementById('stp-btn-upload-bg-img');
+    const btnClearBgImg = document.getElementById('stp-btn-clear-bg-img');
+
+    colorText.value = textColHex;
+    colorTextHex.value = textColHex;
+    colorBg.value = bgColHex;
+    colorBgHex.value = bgColHex;
+
+    const currentFSize = parseFloat(computed.fontSize);
+    fontSize.value = currentFSize;
+    fontSizeVal.textContent = currentFSize + 'px';
+
+    const currentBRad = parseFloat(computed.borderRadius) || 0;
+    borderRadius.value = currentBRad;
+    borderRadiusVal.textContent = currentBRad + 'px';
+
+    const currentOp = Math.round(parseFloat(computed.opacity) * 100) || 100;
+    opacity.value = currentOp;
+    opacityVal.textContent = currentOp + '%';
+
+    paddingInput.value = parseInt(computed.paddingTop) || '';
+    marginInput.value = parseInt(computed.marginTop) || '';
+
+    const fontSelect = document.getElementById('stp-font-family');
+    const displaySelect = document.getElementById('stp-layout-display');
+    const directionSelect = document.getElementById('stp-layout-direction');
+    const justifySelect = document.getElementById('stp-layout-justify');
+    const alignSelect = document.getElementById('stp-layout-align');
+    const gapInput = document.getElementById('stp-layout-gap');
+
+    if (fontSelect) fontSelect.value = el.style.fontFamily || '';
+    if (displaySelect) displaySelect.value = el.style.display || '';
+    if (directionSelect) directionSelect.value = el.style.flexDirection || '';
+    if (justifySelect) justifySelect.value = el.style.justifyContent || '';
+    if (alignSelect) alignSelect.value = el.style.alignItems || '';
+    if (gapInput) gapInput.value = parseInt(el.style.gap) || '';
+
+    loadColorHistory();
+
+    // Pre-populate custom HTML
+    document.getElementById('stp-html-input').value = el.innerHTML;
+
+    let activeSelector = selector;
+    const selectorChoice = document.getElementById('stp-selector-choice');
+
+    const loadRuleValues = (selectedSel) => {
+      activeSelector = selectedSel;
+      const existingStyleRule = matchingRules.find(r => r.selector === selectedSel && r.action === 'edit_style');
+      if (existingStyleRule && typeof existingStyleRule.value === 'object') {
+        const val = existingStyleRule.value;
+        colorText.value = val.color || textColHex;
+        colorTextHex.value = val.color || textColHex;
+        colorBg.value = val['background-color'] || bgColHex;
+        colorBgHex.value = val['background-color'] || bgColHex;
+        fontSize.value = parseFloat(val['font-size']) || currentFSize;
+        fontSizeVal.textContent = (val['font-size'] || currentFSize + 'px');
+        borderRadius.value = parseFloat(val['border-radius']) || currentBRad;
+        borderRadiusVal.textContent = (val['border-radius'] || currentBRad + 'px');
+        opacity.value = val.opacity !== undefined ? Math.round(parseFloat(val.opacity) * 100) : currentOp;
+        opacityVal.textContent = (val.opacity !== undefined ? Math.round(parseFloat(val.opacity) * 100) : currentOp) + '%';
+        paddingInput.value = val.padding ? parseInt(val.padding) : '';
+        marginInput.value = val.margin ? parseInt(val.margin) : '';
+        if (fontSelect) fontSelect.value = val['font-family'] || '';
+        if (displaySelect) displaySelect.value = val['display'] || '';
+        if (directionSelect) directionSelect.value = val['flex-direction'] || '';
+        if (justifySelect) justifySelect.value = val['justify-content'] || '';
+        if (alignSelect) alignSelect.value = val['align-items'] || '';
+        if (gapInput) gapInput.value = val['gap'] ? parseInt(val['gap']) : '';
+      } else {
+        // Reset to computed styles
+        colorText.value = textColHex;
+        colorTextHex.value = textColHex;
+        colorBg.value = bgColHex;
+        colorBgHex.value = bgColHex;
+        fontSize.value = currentFSize;
+        fontSizeVal.textContent = currentFSize + 'px';
+        borderRadius.value = currentBRad;
+        borderRadiusVal.textContent = currentBRad + 'px';
+        opacity.value = currentOp;
+        opacityVal.textContent = currentOp + '%';
+        paddingInput.value = parseInt(computed.paddingTop) || '';
+        marginInput.value = parseInt(computed.marginTop) || '';
+        if (fontSelect) fontSelect.value = el.style.fontFamily || '';
+        if (displaySelect) displaySelect.value = el.style.display || '';
+        if (directionSelect) directionSelect.value = el.style.flexDirection || '';
+        if (justifySelect) justifySelect.value = el.style.justifyContent || '';
+        if (alignSelect) alignSelect.value = el.style.alignItems || '';
+        if (gapInput) gapInput.value = parseInt(el.style.gap) || '';
+      }
+    };
+
+    if (selectorChoice) {
+      selectorChoice.onchange = (e) => {
+        loadRuleValues(e.target.value);
+      };
+      if (uniqueMatchingSelectors.size > 0) {
+        const firstExisting = Array.from(uniqueMatchingSelectors)[0];
+        selectorChoice.value = firstExisting;
+        loadRuleValues(firstExisting);
+      }
+    }
+
+    // Background options container and elements
+    const bgOptionsContainer = document.getElementById('stp-bg-options');
+    const selectBgSize = document.getElementById('stp-bg-size');
+    const selectBgPosition = document.getElementById('stp-bg-position');
+    const selectBgRepeat = document.getElementById('stp-bg-repeat');
+
+    // Prepopulate background styling values
+    if (computed.backgroundImage && computed.backgroundImage !== 'none') {
+      btnClearBgImg.style.display = 'block';
+      if (bgOptionsContainer) bgOptionsContainer.style.display = 'flex';
+
+      if (selectBgSize) {
+        const sz = el.style.backgroundSize || computed.backgroundSize;
+        if (['cover', 'contain', 'auto'].includes(sz)) selectBgSize.value = sz;
+      }
+      if (selectBgPosition) {
+        const pos = el.style.backgroundPosition || computed.backgroundPosition;
+        if (pos.includes('top')) selectBgPosition.value = 'top';
+        else if (pos.includes('bottom')) selectBgPosition.value = 'bottom';
+        else if (pos.includes('left')) selectBgPosition.value = 'left';
+        else if (pos.includes('right')) selectBgPosition.value = 'right';
+        else if (pos.includes('px') || /^-?\d+/.test(pos)) {
+          selectBgPosition.value = 'custom';
+          const parts = pos.split(' ');
+          if (parts[0]) document.getElementById('stp-bg-pos-x').value = parseInt(parts[0]) || 0;
+          if (parts[1]) document.getElementById('stp-bg-pos-y').value = parseInt(parts[1]) || 0;
+          const customPosBlock = document.getElementById('stp-bg-custom-position');
+          if (customPosBlock) customPosBlock.style.display = 'flex';
+        }
+        else selectBgPosition.value = 'center';
+      }
+      if (selectBgRepeat) {
+        const rep = el.style.backgroundRepeat || computed.backgroundRepeat;
+        if (rep.includes('no-repeat')) selectBgRepeat.value = 'no-repeat';
+        else if (rep.includes('repeat')) selectBgRepeat.value = 'repeat';
+      }
+    }
+
+    // Pre-populate tag image styling values
+    let selectImgFit = null;
+    let selectImgPosition = null;
+    if (isImgTag) {
+      const imgOptionsContainer = document.getElementById('stp-img-options');
+      selectImgFit = document.getElementById('stp-img-fit');
+      selectImgPosition = document.getElementById('stp-img-position');
+
+      if (imgOptionsContainer) imgOptionsContainer.style.display = 'flex';
+      if (el.hasAttribute('data-stp-original-src')) {
+        document.getElementById('stp-btn-revert-img-src').style.display = 'block';
+      }
+
+      if (selectImgFit) {
+        const fit = el.style.objectFit || computed.objectFit;
+        if (['fill', 'cover', 'contain', 'none'].includes(fit)) selectImgFit.value = fit;
+      }
+      if (selectImgPosition) {
+        const pos = el.style.objectPosition || computed.objectPosition;
+        if (pos.includes('top')) selectImgPosition.value = 'top';
+        else if (pos.includes('bottom')) selectImgPosition.value = 'bottom';
+        else if (pos.includes('left')) selectImgPosition.value = 'left';
+        else if (pos.includes('right')) selectImgPosition.value = 'right';
+        else selectImgPosition.value = 'center';
+      }
+    }
+
+    // Live update bindings
+    colorText.oninput = () => {
+      colorTextHex.value = colorText.value;
+      applyLiveStyles();
+    };
+    colorTextHex.oninput = () => {
+      if (/^#[0-9A-F]{6}$/i.test(colorTextHex.value)) {
+        colorText.value = colorTextHex.value;
+        applyLiveStyles();
+      }
+    };
+
+    colorBg.oninput = () => {
+      colorBgHex.value = colorBg.value;
+      applyLiveStyles();
+    };
+    colorBgHex.oninput = () => {
+      if (/^#[0-9A-F]{6}$/i.test(colorBgHex.value)) {
+        colorBg.value = colorBgHex.value;
+        applyLiveStyles();
+      }
+    };
+
+    // Text color Eyedropper API
+    const btnEyedropperText = document.getElementById('stp-btn-eyedropper-text');
+    if (btnEyedropperText) {
+      if (!window.EyeDropper) {
+        btnEyedropperText.style.display = 'none';
+      } else {
+        btnEyedropperText.onclick = () => {
+          const eyeDropper = new EyeDropper();
+          eyeDropper.open().then((result) => {
+            const hexColor = result.sRGBHex;
+            colorText.value = hexColor;
+            colorTextHex.value = hexColor.toUpperCase();
+            applyLiveStyles();
+            showToast('Цвет текста выбран с экрана!');
+          }).catch((err) => {
+            // Eyedropper cancelled
+          });
+        };
+      }
+    }
+
+    // Background color Eyedropper API
+    const btnEyedropperBg = document.getElementById('stp-btn-eyedropper-bg');
+    if (btnEyedropperBg) {
+      if (!window.EyeDropper) {
+        btnEyedropperBg.style.display = 'none';
+      } else {
+        btnEyedropperBg.onclick = () => {
+          const eyeDropper = new EyeDropper();
+          eyeDropper.open().then((result) => {
+            const hexColor = result.sRGBHex;
+            colorBg.value = hexColor;
+            colorBgHex.value = hexColor.toUpperCase();
+            applyLiveStyles();
+            showToast('Цвет фона выбран с экрана!');
+          }).catch((err) => {
+            // Eyedropper cancelled
+          });
+        };
+      }
+    }
+
+    fontSize.oninput = () => {
+      fontSizeVal.textContent = fontSize.value + 'px';
+      applyLiveStyles();
+    };
+
+    borderRadius.oninput = () => {
+      borderRadiusVal.textContent = borderRadius.value + 'px';
+      applyLiveStyles();
+    };
+
+    opacity.oninput = () => {
+      opacityVal.textContent = opacity.value + '%';
+      applyLiveStyles();
+    };
+
+    paddingInput.oninput = applyLiveStyles;
+    marginInput.oninput = applyLiveStyles;
+
+    function applyLiveStyles() {
+      el.style.setProperty('color', colorText.value, 'important');
+      el.style.setProperty('background-color', colorBg.value, 'important');
+      el.style.setProperty('font-size', fontSize.value + 'px', 'important');
+      el.style.setProperty('border-radius', borderRadius.value + 'px', 'important');
+      el.style.setProperty('opacity', (opacity.value / 100).toString(), 'important');
+
+      if (paddingInput.value !== '') {
+        el.style.setProperty('padding', paddingInput.value + 'px', 'important');
+      } else {
+        el.style.removeProperty('padding');
+      }
+
+      if (marginInput.value !== '') {
+        el.style.setProperty('margin', marginInput.value + 'px', 'important');
+      } else {
+        el.style.removeProperty('margin');
+      }
+
+      // Live apply background image helper rules
+      const hasBg = el.style.backgroundImage && el.style.backgroundImage !== 'none';
+      if (hasBg) {
+        if (selectBgSize && selectBgSize.value) {
+          el.style.setProperty('background-size', selectBgSize.value, 'important');
+        }
+        if (selectBgPosition && selectBgPosition.value) {
+          if (selectBgPosition.value === 'custom') {
+            const posX = document.getElementById('stp-bg-pos-x').value || '0';
+            const posY = document.getElementById('stp-bg-pos-y').value || '0';
+            el.style.setProperty('background-position', `${posX}px ${posY}px`, 'important');
+          } else {
+            el.style.setProperty('background-position', selectBgPosition.value, 'important');
+          }
+        }
+        if (selectBgRepeat && selectBgRepeat.value) {
+          el.style.setProperty('background-repeat', selectBgRepeat.value, 'important');
+        }
+      }
+
+      // Live apply photo img object fit helper rules
+      if (isImgTag) {
+        if (selectImgFit && selectImgFit.value) {
+          el.style.setProperty('object-fit', selectImgFit.value, 'important');
+        }
+        if (selectImgPosition && selectImgPosition.value) {
+          el.style.setProperty('object-position', selectImgPosition.value, 'important');
+        }
+      }
+
+      if (fontSelect && fontSelect.value) {
+        el.style.setProperty('font-family', fontSelect.value, 'important');
+      } else {
+        el.style.removeProperty('font-family');
+      }
+
+      if (displaySelect && displaySelect.value) {
+        el.style.setProperty('display', displaySelect.value, 'important');
+      } else {
+        el.style.removeProperty('display');
+      }
+
+      if (directionSelect && directionSelect.value) {
+        el.style.setProperty('flex-direction', directionSelect.value, 'important');
+      } else {
+        el.style.removeProperty('flex-direction');
+      }
+
+      if (justifySelect && justifySelect.value) {
+        el.style.setProperty('justify-content', justifySelect.value, 'important');
+      } else {
+        el.style.removeProperty('justify-content');
+      }
+
+      if (alignSelect && alignSelect.value) {
+        el.style.setProperty('align-items', alignSelect.value, 'important');
+      } else {
+        el.style.removeProperty('align-items');
+      }
+
+      if (gapInput && gapInput.value !== '') {
+        el.style.setProperty('gap', gapInput.value + 'px', 'important');
+      } else {
+        el.style.removeProperty('gap');
+      }
+    }
+
+    // Bind dropdown selectors live updates
+    if (selectBgSize) selectBgSize.onchange = applyLiveStyles;
+    if (selectBgPosition) {
+      selectBgPosition.onchange = () => {
+        const customBlock = document.getElementById('stp-bg-custom-position');
+        if (selectBgPosition.value === 'custom') {
+          if (customBlock) customBlock.style.display = 'flex';
+        } else {
+          if (customBlock) customBlock.style.display = 'none';
+        }
+        applyLiveStyles();
+      };
+    }
+
+    const inputBgPosX = document.getElementById('stp-bg-pos-x');
+    const inputBgPosY = document.getElementById('stp-bg-pos-y');
+    if (inputBgPosX) inputBgPosX.oninput = applyLiveStyles;
+    if (inputBgPosY) inputBgPosY.oninput = applyLiveStyles;
+
+    if (selectBgRepeat) selectBgRepeat.onchange = applyLiveStyles;
+    if (isImgTag) {
+      if (selectImgFit) selectImgFit.onchange = applyLiveStyles;
+      if (selectImgPosition) selectImgPosition.onchange = applyLiveStyles;
+    }
+
+    if (fontSelect) fontSelect.onchange = applyLiveStyles;
+    if (displaySelect) displaySelect.onchange = applyLiveStyles;
+    if (directionSelect) directionSelect.onchange = applyLiveStyles;
+    if (justifySelect) justifySelect.onchange = applyLiveStyles;
+    if (alignSelect) alignSelect.onchange = applyLiveStyles;
+    if (gapInput) gapInput.oninput = applyLiveStyles;
+
+    // BG Image upload
+    btnUploadBgImg.onclick = () => uploadBgImg.click();
+    uploadBgImg.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      showToast('Сжатие фонового изображения...');
+      compressAndResizeImage(file, 1200, 0.8).then((dataUrl) => {
+        el.style.setProperty('background-image', `url("${dataUrl}")`, 'important');
+        btnClearBgImg.style.display = 'block';
+        if (bgOptionsContainer) bgOptionsContainer.style.display = 'flex';
+        applyLiveStyles();
+        showToast('Фоновое изображение установлено!');
+      }).catch((err) => {
+        showToast('Ошибка сжатия изображения');
+      });
+    };
+
+    btnClearBgImg.onclick = () => {
+      el.style.removeProperty('background-image');
+      el.style.removeProperty('background-size');
+      el.style.removeProperty('background-position');
+      el.style.removeProperty('background-repeat');
+      uploadBgImg.value = '';
+      btnClearBgImg.style.display = 'none';
+      if (bgOptionsContainer) bgOptionsContainer.style.display = 'none';
+      showToast('Фоновое изображение удалено.');
+    };
+
+    // IMG Tag Src replacement
+    if (isImgTag) {
+      const uploadImgSrc = document.getElementById('stp-upload-img-src');
+      const btnUploadImgSrc = document.getElementById('stp-btn-upload-img-src');
+      const btnRevertImgSrc = document.getElementById('stp-btn-revert-img-src');
+
+      btnUploadImgSrc.onclick = () => uploadImgSrc.click();
+      uploadImgSrc.onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        showToast('Сжатие изображения...');
